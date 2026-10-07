@@ -265,3 +265,5 @@ def test_kanban_shows_guest_host_info(tmp_path, monkeypatch):
     html = c.get("/kanban").get_data(as_text=True)
     assert "&lt;i&gt;Zeile1&lt;/i&gt;\nZeile2" in html
     assert "Keine Host-Info" in html
+    assert "hover-trigger" not in html
+    assert "class=\"hostname\" tabindex=\"0\"" in html

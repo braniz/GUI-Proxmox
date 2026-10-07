@@ -10,12 +10,11 @@
 <h3>{{ 'Laufend' if state == 'running' else 'Gestoppt' }}</h3>
 {% for guest in guests if guest.status == state or (state == 'stopped' and guest.status != 'running') %}
 <article class="kanban-card vm-card">
-<strong>{{ guest.name or 'Unbenannt' }}</strong>
+<span class="hover-card"><strong class="hostname" tabindex="0" aria-describedby="hi-{{ loop.index }}-{{ state }}">{{ guest.name or 'Unbenannt' }}</strong>
+<span class="hover-content" role="tooltip" id="hi-{{ loop.index }}-{{ state }}">{% if guest.host_info %}<pre>{{ guest.host_info }}</pre>{% else %}Keine Host-Info{% endif %}</span></span>
 <span class="badge type">{{ 'VM' if guest.type == 'qemu' else 'LXC' }}</span>
 <span>VMID {{ guest.vmid }}</span><span class="badge {{ 'ok' if guest.status == 'running' else '' }}">{{ guest.status or 'unbekannt' }}</span>
 <small>Node: {{ guest.node }}{% if guest.cpu is defined %} · CPU {{ guest.cpu|pct }}{% endif %}{% if guest.mem is defined %} · RAM {{ guest.mem|gib }}{% endif %}</small>
-<span class="hover-card"><button type="button" class="hover-trigger" aria-describedby="hi-{{ loop.index }}-{{ state }}">Host-Info</button>
-<span class="hover-content" role="tooltip" id="hi-{{ loop.index }}-{{ state }}">{% if guest.host_info %}<pre>{{ guest.host_info }}</pre>{% else %}Keine Host-Info{% endif %}</span></span>
 </article>
 {% else %}<p class="empty">Keine {{ 'laufenden' if state == 'running' else 'gestoppten' }} Gäste.</p>{% endfor %}
 </section>
