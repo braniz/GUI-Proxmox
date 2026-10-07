@@ -3,6 +3,7 @@ import ipaddress
 import json
 from datetime import datetime
 import os
+import re
 import socket
 import tempfile
 import threading
@@ -145,23 +146,38 @@ def update_status(read_file):
 
 
 def apply_comment_prefix(old, submitted, user, now=None):
-    """Stellt neuen Kommentarzeilen "[Datum Zeit] User: " voran; bereits gespeicherte Zeilen bleiben unverändert."""
+    """Stellt neuen Kommentarzeilen "[Datum Zeit] User: " voran; neue Einträge stehen oben, gespeicherte Zeilen bleiben unverändert."""
     old_lines = (old or "").replace("\r\n", "\n").split("\n")
     stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
-    prefix = f"[{stamp}] {user or 'unbekannt'}: "
-    out, in_new = [], False
+    name = user or "unbekannt"
+    prefix = f"[{stamp}] {name}: "
+    own_header = re.compile(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\] " + re.escape(name) + r":(?: |$)")
+    new_out, old_out, in_new = [], [], False
     for line in (submitted or "").replace("\r\n", "\n").strip().split("\n"):
         line = line.rstrip()
         if line in old_lines and line:
             old_lines.remove(line)
-            out.append(line)
+            old_out.append(line)
             in_new = False
-        elif not line:
-            out.append(line)
+            continue
+        if not line:
+            (new_out if in_new else old_out).append(line)
+            continue
+        m = own_header.match(line)
+        if m:
+            line = line[m.end():]
+            if not line:
+                in_new = True
+                new_out.append(None)
+                continue
+            new_out.append(prefix + line)
+        elif in_new and new_out and new_out[-1] is None:
+            new_out[-1] = prefix + line
         else:
-            out.append(line if in_new else prefix + line)
-            in_new = True
-    return "\n".join(out).strip()
+            new_out.append(line if in_new else prefix + line)
+        in_new = True
+    new_out = [x for x in new_out if x is not None]
+    return "\n".join(new_out + old_out).strip()
 
 
 class CommentStore:

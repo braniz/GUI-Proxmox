@@ -163,7 +163,26 @@ def test_comment_requires_login_and_csrf(tmp_path):
     assert CommentStore(str(tmp_path / "c.json")).get(100) == stored
     c.post("/guests/100/comment", data={"comment": stored + "\nzwei", "csrf": token(c, "/guests")})
     lines = CommentStore(str(tmp_path / "c.json")).get(100).split("\n")
-    assert lines[0] == stored and lines[1].endswith("admin: zwei")
+    assert lines[1] == stored and lines[0].endswith("admin: zwei")
+
+
+def test_comment_new_entry_on_top_without_double_prefix():
+    from datetime import datetime
+    from app.guestinfo import apply_comment_prefix
+    now = datetime(2024, 1, 2, 3, 4)
+    old = "[2023-01-01 10:00] admin: alt"
+    out = apply_comment_prefix(old, "[2024-01-02 03:04] admin: neu\n" + old, "admin", now)
+    assert out == "[2024-01-02 03:04] admin: neu\n" + old
+    assert apply_comment_prefix(old, "[2024-01-02 03:04] admin: \n" + old, "admin", now) == old
+    out = apply_comment_prefix(old, old + "\nunten", "admin", now)
+    assert out.split("\n") == ["[2024-01-02 03:04] admin: unten", old]
+
+
+def test_guests_template_has_new_button():
+    from pathlib import Path
+    t = Path("app/templates/guests.html").read_text()
+    assert 'class="comment-new">Neu</button>' in t
+    assert "comment-new" in Path("app/static/guests.js").read_text()
 
 
 def test_guests_page_enriched(tmp_path, monkeypatch):
