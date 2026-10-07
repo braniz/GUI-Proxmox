@@ -410,3 +410,20 @@ def test_auto_todo_from_gui_selection_without_duplicates(tmp_path, monkeypatch):
     assert len(todos) == 1
     assert todos[0]["status"] == "planned" and todos[0]["vmid"] == "100"
     assert "http" in todos[0]["title"]
+
+
+def test_disabling_service_closes_auto_todo_with_comment(tmp_path, monkeypatch):
+    app, c = _services_app(tmp_path, monkeypatch)
+    c.post("/services", data={"csrf": token(c, "/services"), "vmid": ["100"], "svc-100": ["ssh", "http"]})
+    c.get("/kanban")
+    other = c.post("/api/kanban/todos", json={"title": "manuell", "vmid": "100"},
+                   headers={"X-CSRF-Token": token(c, "/kanban")}).get_json()
+    todos = c.get("/api/kanban/todos").get_json()
+    assert len(todos) == 2
+    c.post("/services", data={"csrf": token(c, "/services"), "vmid": ["100"], "svc-100": ["ssh"]})
+    by_id = {t["id"]: t for t in c.get("/api/kanban/todos").get_json()}
+    auto = next(t for t in by_id.values() if t.get("auto_key"))
+    assert auto["status"] == "done"
+    assert auto["comments"][0]["author"] == "admin"
+    assert "http" in auto["comments"][0]["text"] and "nicht benötigt" in auto["comments"][0]["text"]
+    assert by_id[other["id"]]["status"] == "planned" and "comments" not in by_id[other["id"]]

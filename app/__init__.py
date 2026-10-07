@@ -324,7 +324,19 @@ def create_app(config=None):
                 if vmid.isdigit() and len(vmid) <= 10:
                     selections[vmid] = [x for x in request.form.getlist(f"svc-{vmid}") if x in labels]
             try:
-                monitor_store().set_many(selections)
+                store = monitor_store()
+                previous = store.all()
+                store.set_many(selections)
+                user = session.get("user", "unbekannt")
+                for vmid, old in previous.items():
+                    if vmid not in selections:
+                        continue
+                    for service in set(old) - set(selections[vmid]):
+                        todos().close_auto([f"service:{vmid}:{service}"], {
+                            "text": f"Dienst {service} wird nicht benötigt: Überwachung von {user} deaktiviert.",
+                            "author": user,
+                            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        })
                 flash("Dienstüberwachung gespeichert.")
             except OSError:
                 flash("Dienstüberwachung konnte nicht gespeichert werden.")

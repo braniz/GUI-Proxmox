@@ -51,6 +51,12 @@ function makeTodoCard(todo) {
     description.textContent = todo.description;
     card.append(description);
   }
+  for (const entry of Array.isArray(todo.comments) ? todo.comments : []) {
+    const note = document.createElement("p");
+    note.className = "todo-comment";
+    note.textContent = `${entry.author || ""}: ${entry.text || ""}`;
+    card.append(note);
+  }
   if (todo.created_at) {
     const created = document.createElement("small");
     created.textContent = `Erstellt: ${new Date(todo.created_at).toLocaleString("de-DE")}`;
