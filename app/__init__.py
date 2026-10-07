@@ -292,8 +292,8 @@ def create_app(config=None):
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             }
             return jsonify(todos().create(todo)), 201
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+        except ValueError:
+            return jsonify(error="Ungültige ToDo-Daten."), 400
         except OSError:
             return jsonify(error="ToDo konnte nicht gespeichert werden."), 500
 
@@ -318,8 +318,8 @@ def create_app(config=None):
             if todo is None:
                 return jsonify(error="ToDo nicht gefunden."), 404
             return jsonify(todo)
-        except ValueError as exc:
-            return jsonify(error=str(exc)), 400
+        except ValueError:
+            return jsonify(error="Ungültige ToDo-Daten."), 400
         except OSError:
             return jsonify(error="ToDo konnte nicht gespeichert werden."), 500
 
