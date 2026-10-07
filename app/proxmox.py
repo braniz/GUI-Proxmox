@@ -1,4 +1,6 @@
 """Read-only Proxmox-Client: ausschließlich GET-Anfragen."""
+from urllib.parse import quote
+
 import requests
 
 
@@ -36,3 +38,6 @@ class ProxmoxClient:
 
     def storage(self):
         return self.resources("storage")
+
+    def node_version(self, node):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/version")

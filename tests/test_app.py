@@ -19,7 +19,7 @@ def token(c, url="/login"):
 
 
 def test_protected_redirects(client):
-    for path in ("/", "/nodes", "/guests", "/storage"):
+    for path in ("/", "/nodes", "/guests", "/storage", "/status"):
         r = client.get(path)
         assert r.status_code == 302 and "/login" in r.headers["Location"]
 
@@ -73,3 +73,24 @@ def test_guests_tree_page(client, monkeypatch):
     client.post("/login", data={"username": "admin", "password": "pw", "csrf": token(client)})
     html = client.get("/guests").get_data(as_text=True)
     assert "n1" in html and "web" in html and "<details" in html
+
+
+def test_build_status():
+    from app import build_status
+    st = build_status([{"type": "cluster", "quorate": 0, "name": "c"}],
+                      [{"node": "a", "status": "online"}, {"node": "b", "status": "offline"}],
+                      {"a": {"version": "8.1"}, "b": {"version": "8.2"}}, False)
+    assert st["quorate"] is False and len(st["warnings"]) == 4
+    assert build_status([], [], {}, True)["warnings"] == []
+
+
+def test_status_page(client, monkeypatch):
+    from app import proxmox
+    monkeypatch.setattr(proxmox.ProxmoxClient, "nodes", lambda s: [{"node": "n1", "status": "online"}])
+    monkeypatch.setattr(proxmox.ProxmoxClient, "cluster_status", lambda s: [])
+    def boom(s, n):
+        raise proxmox.ProxmoxError("x")
+    monkeypatch.setattr(proxmox.ProxmoxClient, "node_version", boom)
+    client.post("/login", data={"username": "admin", "password": "pw", "csrf": token(client)})
+    html = client.get("/status").get_data(as_text=True)
+    assert "n1" in html and "Info / Hinweis" in html and "Status</a>" in html
