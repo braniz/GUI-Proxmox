@@ -1,0 +1,38 @@
+"""Read-only Proxmox-Client: ausschließlich GET-Anfragen."""
+import requests
+
+
+class ProxmoxError(Exception):
+    pass
+
+
+class ProxmoxClient:
+    def __init__(self, host, port, token_id, token_secret, verify=True, timeout=10):
+        self.base = f"https://{host}:{port}/api2/json"
+        self.verify = verify
+        self.timeout = timeout
+        self.headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
+
+    def _get(self, path, params=None):
+        try:
+            r = requests.get(self.base + path, headers=self.headers, params=params,
+                             verify=self.verify, timeout=self.timeout)
+            r.raise_for_status()
+            return r.json().get("data") or []
+        except (requests.RequestException, ValueError) as exc:
+            raise ProxmoxError(f"Proxmox-Abfrage fehlgeschlagen: {path} ({type(exc).__name__})") from exc
+
+    def cluster_status(self):
+        return self._get("/cluster/status")
+
+    def nodes(self):
+        return self._get("/nodes")
+
+    def resources(self, rtype=None):
+        return self._get("/cluster/resources", {"type": rtype} if rtype else None)
+
+    def guests(self):
+        return [r for r in self.resources() if r.get("type") in ("qemu", "lxc")]
+
+    def storage(self):
+        return self.resources("storage")

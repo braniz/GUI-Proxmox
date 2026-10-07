@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="de"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Proxmox Viewer</title>
+<style>
+body{font-family:sans-serif;margin:0;background:#f4f5f7;color:#222}
+nav{background:#2b2d42;padding:.6rem 1rem;display:flex;gap:1rem;align-items:center}
+nav a,nav button{color:#fff;text-decoration:none;background:none;border:0;font:inherit;cursor:pointer}
+nav form{margin-left:auto}
+main{padding:1rem 2rem}
+table{border-collapse:collapse;width:100%;background:#fff}
+th,td{border:1px solid #ddd;padding:.4rem .6rem;text-align:left}
+th{background:#e9ecef}
+.error,.flash{background:#fde2e2;padding:.6rem;border-radius:4px;margin-bottom:1rem}
+.login{max-width:320px;margin:4rem auto;background:#fff;padding:1.5rem;border-radius:6px}
+.login input{width:100%;box-sizing:border-box;margin:.3rem 0 .8rem;padding:.4rem}
+</style></head><body>
+{% if session.user %}
+<nav><a href="{{ url_for('overview') }}">Übersicht</a><a href="{{ url_for('nodes') }}">Nodes</a>
+<a href="{{ url_for('guests') }}">VMs / Container</a><a href="{{ url_for('storage') }}">Storage</a>
+<form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button>Logout</button></form></nav>
+{% endif %}
+<main>{% if error %}<div class="error">{{ error }}</div>{% endif %}{% block content %}{% endblock %}</main>
+</body></html>

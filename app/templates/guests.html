@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<h1>VMs / Container</h1>
+{% if guests is defined %}
+<table><tr><th>ID</th><th>Name</th><th>Typ</th><th>Node</th><th>Status</th><th>CPU</th><th>RAM</th></tr>
+{% for g in guests|sort(attribute='vmid') %}<tr><td>{{ g.vmid }}</td><td>{{ g.name }}</td><td>{{ 'VM' if g.type=='qemu' else 'LXC' }}</td>
+<td>{{ g.node }}</td><td>{{ g.status }}</td><td>{{ g.cpu|pct }}</td><td>{{ g.mem|gib }} / {{ g.maxmem|gib }}</td></tr>{% endfor %}</table>
+{% endif %}{% endblock %}
