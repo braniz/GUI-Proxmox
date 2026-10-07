@@ -1,6 +1,6 @@
 # GUI-Proxmox
 
-Proxmox Projekt für die Webbasierte Darstellung und Management von Proxmox Clustern.
+Proxmox Projekt für die Webbasierte Darstellung und Management von Proxmox Clustern.<br>
 Das ganze Projekt wurde mit GitHub copilot erstellt.
 
 ## Read-only Benutzer für Monitoring
