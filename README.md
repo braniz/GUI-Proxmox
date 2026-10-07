@@ -1,3 +1,3 @@
 # GUI-Proxmox
 
-Hallo Readme
+Proxmox Projekt für die Webbasierte Darstellung und Management von Proxmox Clustern.
