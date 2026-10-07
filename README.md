@@ -49,7 +49,7 @@ Auf der Seite „VMs / Container pro Node“ werden für laufende Gäste IP-Adre
 
 Voraussetzungen:
 
-- **QEMU**: QEMU Guest Agent muss im Gast installiert und aktiv sein (Option „Agent“ in der VM). Ohne Agent wird die IP als „unbekannt“ angezeigt.
+- **QEMU**: QEMU Guest Agent muss auf der Gast-VM installiert und aktiviert sein, damit IPs, Host-Info und weitere Agent-Daten verfügbar sind. Ohne Agent wird die IP als „unbekannt“ angezeigt.
 - **LXC**: IPs über `/nodes/{node}/lxc/{vmid}/interfaces`. `host.info` wird für LXC nicht unterstützt, da die Proxmox-API keinen lesenden Endpoint dafür bietet (ggf. später per SSH).
 - **Token-Rechte**: `PVEAuditor` allein reicht evtl. nicht für Agent-Abfragen. Zusätzlich eine Rolle mit `VM.GuestAgent.Audit` und `VM.GuestAgent.FileRead` (PVE 9) bzw. `VM.Monitor` (PVE 8) vergeben, z. B.:
 
@@ -58,6 +58,21 @@ pveum role add GuestAgentRead -privs "VM.GuestAgent.Audit VM.GuestAgent.FileRead
 pveum role add GuestAgentRead -privs "VM.Monitor"                                   # PVE 8
 pveum acl modify / -user monitor-user@pve -role GuestAgentRead
 ```
+
+QEMU Guest Agent auf der Gast-VM installieren und aktivieren:
+
+```bash
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-agent
+
+# Fedora / RHEL
+sudo dnf install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-agent
+
+# openSUSE
+sudo zypper install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-agent
+```
+
+Anschließend in Proxmox bei der VM unter **Options** → **QEMU Guest Agent** aktivieren. Den Agent-Status in der Gast-VM mit `sudo systemctl status qemu-guest-agent` oder die Verbindung auf dem Proxmox-Host mit `qm agent <VMID> ping` prüfen.
 
 - **Dienste**: TCP-Connect-Check von der App zur IP des Gasts (Ports per `SERVICE_PORTS`, abschaltbar mit `SERVICE_CHECK=false`).
 
