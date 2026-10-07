@@ -180,10 +180,12 @@ def create_app(config=None):
                 session.clear()
                 session["user"] = user
                 session.permanent = True
-                nxt = request.args.get("next", "")
-                if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
-                    nxt = url_for("overview")
-                return redirect(nxt)
+                destinations = {
+                    url_for(name): name
+                    for name in ("overview", "nodes", "guests", "storage", "status", "kanban")
+                }
+                endpoint = destinations.get(request.args.get("next", ""), "overview")
+                return redirect(url_for(endpoint))
             flash("Benutzername oder Passwort falsch.")
         return render_template("login.html")
 

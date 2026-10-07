@@ -50,6 +50,13 @@ def test_no_open_redirect(client):
     assert r.headers["Location"] == "/"
 
 
+def test_login_redirect_uses_known_internal_route(client):
+    r = client.post("/login?next=/kanban", data={
+        "username": "admin", "password": "pw", "csrf": token(client),
+    })
+    assert r.headers["Location"] == "/kanban"
+
+
 def test_only_get_in_client():
     import inspect
     from app import proxmox
