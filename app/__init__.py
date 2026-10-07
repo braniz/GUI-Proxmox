@@ -2,16 +2,19 @@ import hmac
 import os
 import secrets
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from functools import wraps
+from uuid import uuid4
 
 from dotenv import load_dotenv
-from flask import (Flask, abort, flash, redirect, render_template, request,
+from flask import (Flask, abort, flash, jsonify, redirect, render_template, request,
                    session, url_for)
 from werkzeug.security import check_password_hash
 
 from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore,
                         clean_host_info, detect_services, extract_lxc_ips,
                         extract_qemu_ips, parse_service_ports)
+from .kanban import TodoStore, read_host_info, validate_todo_fields
 from .proxmox import ProxmoxClient, ProxmoxError
 
 # Hash zum Angleichen der Laufzeit bei unbekanntem Benutzer
@@ -82,6 +85,9 @@ def create_app(config=None):
         SERVICE_PORTS=os.environ.get("SERVICE_PORTS", "22:ssh,80:http,443:https"),
         COMMENTS_DB=os.environ.get("COMMENTS_DB")
         or os.path.join(os.environ.get("DATA_DIR", "data"), "comments.json"),
+        KANBAN_TODOS_DB=os.environ.get("KANBAN_TODOS_DB")
+        or os.path.join(os.environ.get("DATA_DIR", "data"), "kanban-todos.json"),
+        HOST_INFO_FILE=os.environ.get("HOST_INFO_FILE", "/srv/info/host.info"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true",
@@ -101,6 +107,9 @@ def create_app(config=None):
 
     def comments():
         return CommentStore(app.config["COMMENTS_DB"])
+
+    def todos():
+        return TodoStore(app.config["KANBAN_TODOS_DB"])
 
     def enrich_guest(c, g, ports, saved):
         """Ergänzt IPs, Dienste und host.info; Fehler pro Gast werden abgefangen."""
@@ -140,7 +149,7 @@ def create_app(config=None):
         return session["csrf"]
 
     def check_csrf():
-        sent = request.form.get("csrf", "")
+        sent = request.headers.get("X-CSRF-Token") or request.form.get("csrf", "")
         expected = session.get("csrf")
         if not expected or not hmac.compare_digest(sent, expected):
             abort(400)
@@ -171,10 +180,12 @@ def create_app(config=None):
                 session.clear()
                 session["user"] = user
                 session.permanent = True
-                nxt = request.args.get("next", "")
-                if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
-                    nxt = url_for("overview")
-                return redirect(nxt)
+                destinations = {
+                    url_for(name): name
+                    for name in ("overview", "nodes", "guests", "storage", "status", "kanban")
+                }
+                endpoint = destinations.get(request.args.get("next", ""), "overview")
+                return redirect(url_for(endpoint))
             flash("Benutzername oder Passwort falsch.")
         return render_template("login.html")
 
@@ -251,6 +262,68 @@ def create_app(config=None):
                     versions[n.get("node")] = None
             return build_status(c.cluster_status(), ns, versions, app.config["PVE_VERIFY_SSL"])
         return page("status.html", st=build)
+
+    @app.route("/kanban")
+    @login_required
+    def kanban():
+        guests, error = [], None
+        try:
+            guests = client().guests()
+        except ProxmoxError as exc:
+            error = str(exc)
+        return render_template(
+            "kanban.html", guests=guests,
+            host_info=read_host_info(app.config["HOST_INFO_FILE"]), error=error,
+        )
+
+    @app.route("/api/kanban/todos", methods=["GET", "POST"])
+    @login_required
+    def kanban_todos():
+        if request.method == "GET":
+            return jsonify(todos().all())
+        check_csrf()
+        data = request.get_json(silent=True)
+        try:
+            fields = validate_todo_fields(data, require_title=True)
+            fields.setdefault("description", "")
+            fields.setdefault("status", "planned")
+            fields.setdefault("vmid", None)
+            todo = {
+                "id": uuid4().hex,
+                **fields,
+                "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            }
+            return jsonify(todos().create(todo)), 201
+        except ValueError:
+            return jsonify(error="Ungültige ToDo-Daten."), 400
+        except OSError:
+            return jsonify(error="ToDo konnte nicht gespeichert werden."), 500
+
+    @app.route("/api/kanban/todos/<todo_id>", methods=["PUT", "DELETE"])
+    @login_required
+    def kanban_todo(todo_id):
+        check_csrf()
+        store = todos()
+        if request.method == "DELETE":
+            try:
+                if not store.delete(todo_id):
+                    return jsonify(error="ToDo nicht gefunden."), 404
+                return "", 204
+            except OSError:
+                return jsonify(error="ToDo konnte nicht gelöscht werden."), 500
+        data = request.get_json(silent=True)
+        try:
+            fields = validate_todo_fields(data)
+            if not fields:
+                return jsonify(error="Keine Änderungen übermittelt."), 400
+            todo = store.update(todo_id, fields)
+            if todo is None:
+                return jsonify(error="ToDo nicht gefunden."), 404
+            return jsonify(todo)
+        except ValueError:
+            return jsonify(error="Ungültige ToDo-Daten."), 400
+        except OSError:
+            return jsonify(error="ToDo konnte nicht gespeichert werden."), 500
 
     @app.template_filter("gib")
     def gib(v):
