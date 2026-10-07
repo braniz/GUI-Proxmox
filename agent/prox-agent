@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+"""prox-agent: liest Systeminformationen einer VM/eines Gasts aus (nur Standardbibliothek)."""
+import argparse
+import configparser
+import json
+import hmac
+import logging
+import os
+import platform
+import shutil
+import socket
+import stat
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+VERSION = "1.0.0"
+DEFAULT_CONFIG = "/etc/prox-agent/prox-agent.conf"
+PLUGIN_DIR = "/usr/lib/prox-agent/plugin"
+LOCAL_DIR = "/usr/lib/prox-agent/local"
+PROC = "/proc"
+OS_RELEASE = ("/etc/os-release", "/usr/lib/os-release")
+PSEUDO_FS = {"proc", "sysfs", "tmpfs", "devtmpfs", "devpts", "cgroup", "cgroup2", "overlay",
+             "squashfs", "securityfs", "debugfs", "tracefs", "mqueue", "hugetlbfs", "pstore",
+             "bpf", "autofs", "configfs", "fusectl", "binfmt_misc", "ramfs", "efivarfs"}
+
+log = logging.getLogger("prox-agent")
+
+DEFAULTS = {
+    "interval": 60,
+    "services": ["ssh", "sshd", "cron", "chronyd", "systemd-timesyncd", "qemu-guest-agent"],
+    "bind": "127.0.0.1",
+    "port": 0,
+    "token": "",
+    "output_file": "/var/lib/prox-agent/info.json",
+    "host_info_file": "",
+    "plugin_timeout": 10,
+    "plugin_dir": PLUGIN_DIR,
+    "local_dir": LOCAL_DIR,
+}
+
+
+# ---------------------------------------------------------------- Konfiguration
+def load_config(path=None):
+    """Liest die INI-Konfiguration ([agent]); fehlende Werte erhalten Standardwerte."""
+    cfg = dict(DEFAULTS)
+    if not path or not os.path.isfile(path):
+        return cfg
+    parser = configparser.ConfigParser()
+    parser.read(path, encoding="utf-8")
+    if not parser.has_section("agent"):
+        return cfg
+    sec = parser["agent"]
+    for key in ("interval", "port", "plugin_timeout"):
+        if key in sec:
+            try:
+                cfg[key] = int(sec[key])
+            except ValueError:
+                log.warning("Ungueltiger Wert fuer %s: %r", key, sec[key])
+    for key in ("bind", "token", "output_file", "host_info_file", "plugin_dir", "local_dir"):
+        if key in sec:
+            cfg[key] = sec[key].strip()
+    if "services" in sec:
+        cfg["services"] = [s.strip() for s in sec["services"].replace("\n", ",").split(",") if s.strip()]
+    cfg["interval"] = max(cfg["interval"], 1)
+    cfg["plugin_timeout"] = max(cfg["plugin_timeout"], 1)
+    return cfg
+
+
+# ---------------------------------------------------------------- Hilfsfunktionen
+def _read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+def _run(cmd, timeout=30):
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+        return res.returncode, res.stdout
+    except (OSError, subprocess.SubprocessError):
+        return None, ""
+
+
+# ---------------------------------------------------------------- Collector
+def collect_host():
+    hostname = socket.gethostname()
+    try:
+        fqdn = socket.getfqdn()
+    except OSError:
+        fqdn = hostname
+    return {"hostname": hostname, "fqdn": fqdn}
+
+
+def collect_os():
+    info = {}
+    for path in OS_RELEASE:
+        text = _read(path)
+        if text is None:
+            continue
+        for line in text.splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, _, value = line.partition("=")
+                info[key.strip()] = value.strip().strip('"').strip("'")
+        break
+    return {
+        "name": info.get("NAME"),
+        "pretty_name": info.get("PRETTY_NAME"),
+        "id": info.get("ID"),
+        "version_id": info.get("VERSION_ID"),
+        "kernel": platform.release(),
+        "architecture": platform.machine(),
+    }
+
+
+def collect_uptime():
+    text = _read(os.path.join(PROC, "uptime"))
+    try:
+        seconds = float(text.split()[0])
+    except (AttributeError, IndexError, ValueError):
+        return {"uptime_seconds": None, "boot_time": None}
+    boot = datetime.fromtimestamp(time.time() - seconds, tz=timezone.utc)
+    return {"uptime_seconds": int(seconds), "boot_time": boot.isoformat()}
+
+
+def collect_cpu():
+    text = _read(os.path.join(PROC, "cpuinfo")) or ""
+    model, cores = None, 0
+    for line in text.splitlines():
+        key, _, value = line.partition(":")
+        key = key.strip()
+        if key == "processor":
+            cores += 1
+        elif key == "model name" and model is None:
+            model = value.strip()
+    load = None
+    text = _read(os.path.join(PROC, "loadavg"))
+    if text:
+        try:
+            load = [float(x) for x in text.split()[:3]]
+        except ValueError:
+            load = None
+    return {"model": model, "cores": cores or os.cpu_count(), "load_average": load}
+
+
+def collect_memory():
+    values = {}
+    for line in (_read(os.path.join(PROC, "meminfo")) or "").splitlines():
+        key, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            values[key] = int(parts[0]) * 1024
+    total = values.get("MemTotal")
+    avail = values.get("MemAvailable", values.get("MemFree"))
+    stotal = values.get("SwapTotal")
+    sfree = values.get("SwapFree")
+    return {
+        "total_bytes": total,
+        "available_bytes": avail,
+        "used_bytes": total - avail if total is not None and avail is not None else None,
+        "swap_total_bytes": stotal,
+        "swap_used_bytes": stotal - sfree if stotal is not None and sfree is not None else None,
+    }
+
+
+def _unescape_mount(value):
+    return value.replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\")
+
+
+def collect_disks():
+    result, seen = [], set()
+    for line in (_read(os.path.join(PROC, "mounts")) or "").splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        device, mount, fstype = parts[0], _unescape_mount(parts[1]), parts[2]
+        if fstype in PSEUDO_FS or mount in seen:
+            continue
+        seen.add(mount)
+        try:
+            usage = shutil.disk_usage(mount)
+        except OSError:
+            continue
+        result.append({"device": device, "mount": mount, "fstype": fstype,
+                       "total_bytes": usage.total, "used_bytes": usage.used,
+                       "free_bytes": usage.free})
+    return result
+
+
+def collect_network():
+    interfaces = {}
+    rc, out = _run(["ip", "-j", "addr"], timeout=10)
+    if rc == 0 and out:
+        try:
+            for item in json.loads(out):
+                interfaces[item["ifname"]] = {
+                    "mac": item.get("address"),
+                    "state": item.get("operstate"),
+                    "addresses": [f"{a['local']}/{a['prefixlen']}" for a in item.get("addr_info", [])
+                                  if "local" in a],
+                }
+            return interfaces
+        except (ValueError, KeyError, TypeError):
+            interfaces = {}
+    base = "/sys/class/net"
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return interfaces
+    for name in names:
+        mac = (_read(os.path.join(base, name, "address")) or "").strip() or None
+        state = (_read(os.path.join(base, name, "operstate")) or "").strip() or None
+        interfaces[name] = {"mac": mac, "state": state, "addresses": []}
+    return interfaces
+
+
+def collect_updates():
+    """Best-Effort: apt, dnf, zypper. Liefert manager=None, wenn nichts verfuegbar ist."""
+    if shutil.which("apt-get"):
+        rc, out = _run(["apt-get", "-s", "upgrade"], timeout=60)
+        if rc == 0:
+            return {"manager": "apt", "count": sum(1 for l in out.splitlines() if l.startswith("Inst "))}
+    elif shutil.which("dnf"):
+        rc, out = _run(["dnf", "-q", "--cacheonly", "check-update"], timeout=60)
+        if rc in (0, 100):
+            return {"manager": "dnf", "count": sum(1 for l in out.splitlines()
+                                                   if l.strip() and len(l.split()) == 3 and "." in l.split()[0])}
+    elif shutil.which("zypper"):
+        rc, out = _run(["zypper", "-q", "--no-refresh", "list-updates"], timeout=60)
+        if rc == 0:
+            return {"manager": "zypper", "count": sum(1 for l in out.splitlines() if l.startswith("v |"))}
+    return {"manager": None, "count": None}
+
+
+def collect_reboot_required():
+    return os.path.exists("/var/run/reboot-required") or os.path.exists("/run/reboot-required")
+
+
+def collect_services(names):
+    result = {}
+    for name in names:
+        rc, out = _run(["systemctl", "is-active", name], timeout=10)
+        result[name] = out.strip() if rc is not None and out.strip() else "unknown"
+    return result
+
+
+def collect_users():
+    rc, out = _run(["who"], timeout=10)
+    return len([l for l in out.splitlines() if l.strip()]) if rc == 0 else None
+
+
+# ---------------------------------------------------------------- Plugins
+def _check_plugin_file(path):
+    """Gibt None zurueck, wenn die Datei ausgefuehrt werden darf, sonst den Ablehnungsgrund."""
+    try:
+        st = os.stat(path)
+    except OSError as exc:
+        return f"stat fehlgeschlagen: {exc}"
+    if not stat.S_ISREG(st.st_mode):
+        return "keine regulaere Datei"
+    if not st.st_mode & stat.S_IXUSR:
+        return "nicht ausfuehrbar"
+    if st.st_uid != 0:
+        return "nicht im Besitz von root"
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return "gruppen- oder welt-beschreibbar"
+    return None
+
+
+def run_plugins(directory, timeout):
+    """Fuehrt alle Plugins eines Verzeichnisses aus; Fehler werden als {"error": ...} markiert."""
+    results = {}
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        return results
+    for name in names:
+        if name.startswith(".") or name.endswith(".example"):
+            continue
+        path = os.path.join(directory, name)
+        if os.path.isdir(path):
+            continue
+        key = os.path.splitext(name)[0] if name.endswith((".py", ".sh")) else name
+        reason = _check_plugin_file(path)
+        if reason:
+            if reason != "nicht ausfuehrbar":
+                log.warning("Plugin %s uebersprungen: %s", path, reason)
+                results[key] = {"error": f"uebersprungen: {reason}"}
+            continue
+        try:
+            res = subprocess.run([path], capture_output=True, text=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            log.error("Plugin %s: Timeout nach %ss", path, timeout)
+            results[key] = {"error": "timeout"}
+            continue
+        except OSError as exc:
+            log.error("Plugin %s: %s", path, exc)
+            results[key] = {"error": f"start fehlgeschlagen: {exc}"}
+            continue
+        if res.returncode != 0:
+            log.error("Plugin %s: Exit-Code %s", path, res.returncode)
+            results[key] = {"error": f"exit code {res.returncode}"}
+            continue
+        try:
+            results[key] = json.loads(res.stdout)
+        except ValueError:
+            log.error("Plugin %s: ungueltiges JSON", path)
+            results[key] = {"error": "invalid json"}
+    return results
+
+
+# ---------------------------------------------------------------- Zusammenstellung
+def collect_all(cfg):
+    data = {"agent_version": VERSION,
+            "timestamp": datetime.now(timezone.utc).isoformat()}
+    data.update(collect_host())
+    data["os"] = collect_os()
+    data.update(collect_uptime())
+    data["cpu"] = collect_cpu()
+    data["memory"] = collect_memory()
+    data["disks"] = collect_disks()
+    data["network"] = collect_network()
+    data["updates"] = collect_updates()
+    data["reboot_required"] = collect_reboot_required()
+    data["services"] = collect_services(cfg["services"])
+    data["logged_in_users"] = collect_users()
+    data["plugins"] = run_plugins(cfg["plugin_dir"], cfg["plugin_timeout"])
+    data["local"] = run_plugins(cfg["local_dir"], cfg["plugin_timeout"])
+    return data
+
+
+def render_host_info(data):
+    mem = data["memory"]
+    lines = [
+        f"Hostname: {data['hostname']}",
+        f"FQDN: {data['fqdn']}",
+        f"OS: {data['os'].get('pretty_name')}",
+        f"Kernel: {data['os'].get('kernel')}",
+        f"Uptime: {data.get('uptime_seconds')} s",
+        f"CPU: {data['cpu'].get('model')} ({data['cpu'].get('cores')} Kerne)",
+        f"RAM: {mem.get('used_bytes')} / {mem.get('total_bytes')} Bytes",
+        f"Updates: {data['updates'].get('count')}",
+        f"Reboot erforderlich: {'ja' if data['reboot_required'] else 'nein'}",
+    ]
+    for name, state in data["services"].items():
+        lines.append(f"Dienst {name}: {state}")
+    return "\n".join(lines) + "\n"
+
+
+def write_atomic(path, content, mode=0o644):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = f"{path}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------- Daemon
+class Snapshot:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._data = {}
+
+    def set(self, data):
+        with self._lock:
+            self._data = data
+
+    def get(self):
+        with self._lock:
+            return self._data
+
+
+def make_handler(snapshot, token):
+    class Handler(BaseHTTPRequestHandler):
+        def _send(self, code, body, ctype="application/json"):
+            payload = body.encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_GET(self):
+            if self.path.split("?")[0] not in ("/", "/info", "/info.json"):
+                return self._send(404, json.dumps({"error": "not found"}))
+            if token:
+                auth = self.headers.get("Authorization", "")
+                expected = "Bearer " + token
+                if not hmac.compare_digest(auth.encode(), expected.encode()):
+                    return self._send(401, json.dumps({"error": "unauthorized"}))
+            self._send(200, json.dumps(snapshot.get(), indent=2))
+
+        def log_message(self, fmt, *args):
+            log.debug("http: " + fmt, *args)
+
+    return Handler
+
+
+def serve(cfg):
+    snapshot = Snapshot()
+    if cfg["port"]:
+        if not cfg["token"] and cfg["bind"] not in ("127.0.0.1", "::1", "localhost"):
+            log.error("Nicht-lokale Bindung erfordert ein Token; HTTP wird nicht gestartet")
+        else:
+            server = ThreadingHTTPServer((cfg["bind"], cfg["port"]), make_handler(snapshot, cfg["token"]))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            log.info("HTTP auf %s:%s", cfg["bind"], cfg["port"])
+    while True:
+        try:
+            data = collect_all(cfg)
+            snapshot.set(data)
+            if cfg["output_file"]:
+                write_atomic(cfg["output_file"], json.dumps(data, indent=2))
+            if cfg["host_info_file"]:
+                write_atomic(cfg["host_info_file"], render_host_info(data))
+        except Exception:  # Daemon darf nie wegen eines Collectors sterben
+            log.exception("Erfassung fehlgeschlagen")
+        time.sleep(cfg["interval"])
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="prox-agent", description="Systeminformationen als JSON")
+    ap.add_argument("--version", action="version", version=f"prox-agent {VERSION}")
+    ap.add_argument("--config", default=DEFAULT_CONFIG, help="Pfad zur Konfigurationsdatei")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--once", action="store_true", help="JSON ausgeben und beenden (Standard)")
+    mode.add_argument("--serve", "--daemon", action="store_true", dest="serve", help="Daemon-Modus")
+    args = ap.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+    cfg = load_config(args.config)
+    if args.serve:
+        serve(cfg)
+        return 0
+    print(json.dumps(collect_all(cfg), indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

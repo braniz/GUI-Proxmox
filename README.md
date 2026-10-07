@@ -170,3 +170,7 @@ sudo systemctl start host-info.service   # sofort einmal ausführen
 - Das Script schreibt **atomar**: erst in eine temporäre Datei, dann per `mv` an den Zielort. So liest die GUI nie eine halb geschriebene Datei.
 - Die Datei muss lesbar sein (z. B. `644`), damit der QEMU Guest Agent sie lesen kann.
 - Das Feature gilt nur für **QEMU-VMs** (nicht für LXC-Container).
+
+## prox-agent (Gast-Agent)
+
+Im Verzeichnis [`agent/`](agent/README.md) liegt ein systemd-Agent, der auf VMs installiert wird und Systeminformationen als JSON bereitstellt (Erweiterungen unter `/usr/lib/prox-agent/plugin` und `/usr/lib/prox-agent/local`).
