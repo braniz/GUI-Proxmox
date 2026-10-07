@@ -14,7 +14,8 @@ from werkzeug.security import check_password_hash
 
 from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
-                        extract_qemu_ips, parse_service_ports, missing_services,
+                        extract_qemu_ips, extract_qemu_hostname, extract_qemu_interfaces,
+                        extract_fsinfo, parse_loadavg, count_cpus, parse_service_ports, missing_services,
                         ServiceMonitorStore, DEFAULT_SERVICE_PORTS)
 from .kanban import (
     BULK_ACTIONS, TodoStore, make_history_entry, read_host_info, validate_comment, validate_todo_fields,
@@ -280,6 +281,47 @@ def create_app(config=None):
                 gs = list(pool.map(lambda g: enrich_guest(c, g, ports, saved), gs))
             return group_guests_by_node(c.nodes(), gs)
         return page("guests.html", tree=tree, max_comment=lambda: MAX_COMMENT_LEN)
+
+    @app.route("/guests/<int:vmid>")
+    @login_required
+    def guest_detail(vmid):
+        c = client()
+        try:
+            g = next((x for x in c.guests() if x.get("vmid") == vmid), None)
+        except ProxmoxError as exc:
+            return render_template("guest_detail.html", error=str(exc), guest=None)
+        if g is None:
+            abort(404)
+        node, kind = g.get("node"), g.get("type")
+        d = {"hostname": None, "interfaces": [], "fs": None, "load": None, "cpus": None, "cpu_usage": None}
+        err = {}
+
+        def attempt(key, fn):
+            try:
+                return fn()
+            except (ProxmoxError, ValueError, TypeError, AttributeError):
+                err[key] = True
+                return None
+
+        running = g.get("status") == "running"
+        if running and kind == "qemu":
+            hn = attempt("hostname", lambda: extract_qemu_hostname(c.qemu_hostname(node, vmid)))
+            d["hostname"] = hn
+            if hn is None:
+                err["hostname"] = True
+            ifs = attempt("ips", lambda: extract_qemu_interfaces(c.qemu_interfaces(node, vmid)))
+            d["interfaces"] = ifs or []
+            d["fs"] = attempt("fs", lambda: extract_fsinfo(c.qemu_fsinfo(node, vmid)))
+            d["load"] = attempt("load", lambda: parse_loadavg(c.qemu_file_read(node, vmid, "/proc/loadavg")))
+            if d["load"] is None:
+                err["load"] = True
+            d["cpus"] = attempt("cpus", lambda: count_cpus(c.qemu_file_read(node, vmid, "/proc/cpuinfo")))
+            d["cpu_usage"] = attempt("cpu_usage", lambda: c.qemu_status(node, vmid).get("cpu"))
+        elif running and kind == "lxc":
+            d["interfaces"] = [{"name": "", "mac": None, "ips": ips} for ips in
+                               [attempt("ips", lambda: extract_lxc_ips(c.lxc_interfaces(node, vmid)))] if ips]
+        return render_template("guest_detail.html", error=None, guest=g, d=d, err=err,
+                               running=running, kind=kind)
 
     @app.route("/guests/<int:vmid>/info")
     @login_required

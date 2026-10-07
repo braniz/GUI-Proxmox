@@ -1,0 +1,31 @@
+{% extends "base.html" %}{% block content %}
+<p><a href="{{ url_for('guests') }}">← Zurück zur Gästeliste</a></p>
+{% if error %}<div class="flash">{{ error }}</div>{% else %}
+<h1>{{ 'VM' if kind == 'qemu' else 'LXC' }} {{ guest.vmid }} · {{ guest.name }}</h1>
+<p class="meta">Node: {{ guest.node }} · Status: <span class="badge {{ 'ok' if running else '' }}">{{ guest.status }}</span></p>
+{% if not running %}<p>Gast läuft nicht.</p>
+{% else %}
+{% if kind == 'lxc' %}<p class="meta">Hinweis: Für LXC-Container gibt es keinen Guest Agent; Dateisystem und CPU-Last sind darüber nicht abfragbar.</p>{% endif %}
+{% set hint = 'Guest Agent nicht erreichbar' %}
+<h2>Hostname</h2>
+{% if kind == 'qemu' %}{% if d.hostname %}<p>{{ d.hostname }}</p>{% else %}<p class="meta">{{ hint if err.hostname else 'Nicht verfügbar' }}</p>{% endif %}
+{% else %}<p>{{ guest.name }}</p>{% endif %}
+<h2>IP-Adressen</h2>
+{% if err.ips %}<p class="meta">{{ hint if kind == 'qemu' else 'Nicht erreichbar' }}</p>
+{% elif d.interfaces %}<table><tr><th>Interface</th><th>MAC</th><th>IP-Adressen</th></tr>
+{% for i in d.interfaces %}<tr><td>{{ i.name or '–' }}</td><td>{{ i.mac or '–' }}</td><td>{{ i.ips|join(', ') if i.ips else '–' }}</td></tr>{% endfor %}</table>
+{% else %}<p class="meta">Keine IP-Adressen gefunden.</p>{% endif %}
+{% if kind == 'qemu' %}
+<h2>Filesystem</h2>
+{% if err.fs %}<p class="meta">{{ hint }}</p>
+{% elif d.fs %}<table><tr><th>Mountpunkt</th><th>Typ</th><th>Belegt</th><th>Gesamt</th><th>Auslastung</th></tr>
+{% for f in d.fs %}<tr><td>{{ f.mount }}</td><td>{{ f.type }}</td><td>{{ f.used or 'n/a' }}</td><td>{{ f.total or 'n/a' }}</td><td>{{ (f.percent ~ ' %') if f.percent is not none else 'n/a' }}</td></tr>{% endfor %}</table>
+{% else %}<p class="meta">Keine Dateisysteme gemeldet.</p>{% endif %}
+<h2>CPU-Last</h2>
+{% if d.load %}<p>Load Average (1/5/15 min): {{ d.load[0] }} / {{ d.load[1] }} / {{ d.load[2] }}</p>
+{% else %}<p class="meta">Load Average nicht verfügbar{% if err.load %} ({{ hint }}){% endif %}.</p>{% endif %}
+<p class="meta">CPUs: {{ d.cpus if d.cpus else 'nicht verfügbar' }} · Aktuelle CPU-Auslastung: {{ d.cpu_usage|pct if d.cpu_usage is not none else 'nicht verfügbar' }}</p>
+{% else %}
+<h2>Filesystem / CPU-Last</h2><p class="meta">Über den Guest Agent bei LXC nicht unterstützt.</p>
+{% endif %}
+{% endif %}{% endif %}{% endblock %}

@@ -538,7 +538,7 @@ def test_hostname_is_bordered_clickable(tmp_path, monkeypatch):
     _login(c)
     html = c.get("/guests").get_data(as_text=True)
     assert 'class="hostname guest-hostname"' in html
-    assert 'data-info-url="/guests/100/info"' in html
+    assert 'href="/guests/100"' in html
     assert "border:2px solid" in html
 
 
@@ -560,7 +560,70 @@ def test_guest_info_qemu_and_lxc(tmp_path, monkeypatch):
     assert c.get("/guests/999/info").status_code == 404
 
 
-def test_guest_js_loads_info_on_click():
+def test_guest_js_has_no_inline_fetch():
     from pathlib import Path
-    js = Path("app/static/guests.js").read_text()
-    assert "guest-hostname" in js and "data-info-url" in js and "fetch(" in js
+    assert "fetch(" not in Path("app/static/guests.js").read_text()
+
+
+def _detail_app(tmp_path, monkeypatch, status="running"):
+    from app import proxmox
+    c = _info_app(tmp_path, monkeypatch)
+    P = proxmox.ProxmoxClient
+    monkeypatch.setattr(P, "guests", lambda s: [
+        {"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": status},
+        {"node": "n1", "vmid": 101, "name": "ct", "type": "lxc", "status": status}])
+    monkeypatch.setattr(P, "qemu_hostname", lambda s, n, v: {"result": {"host-name": "<i>vmhost</i>"}})
+    monkeypatch.setattr(P, "qemu_interfaces", lambda s, n, v: {"result": [
+        {"name": "lo", "ip-addresses": [{"ip-address": "127.0.0.1"}]},
+        {"name": "eth0", "hardware-address": "aa:bb:cc:dd:ee:ff",
+         "ip-addresses": [{"ip-address": "10.0.0.5"}]}]})
+    monkeypatch.setattr(P, "qemu_fsinfo", lambda s, n, v: {"result": [
+        {"mountpoint": "/", "type": "ext4", "used-bytes": 1073741824, "total-bytes": 4294967296},
+        {"mountpoint": "/run", "type": "tmpfs", "used-bytes": 1, "total-bytes": 2}]})
+    monkeypatch.setattr(P, "qemu_file_read", lambda s, n, v, p: {
+        "content": "0.10 0.20 0.30 1/100 5\n" if "loadavg" in p else "processor\t: 0\nprocessor\t: 1\n"})
+    monkeypatch.setattr(P, "qemu_status", lambda s, n, v: {"cpu": 0.25})
+    _login(c)
+    return c
+
+
+def test_guest_detail_requires_login(tmp_path, monkeypatch):
+    c = _info_app(tmp_path, monkeypatch)
+    assert c.get("/guests/100").status_code == 302
+
+
+def test_guest_detail_qemu_renders_all_sections(tmp_path, monkeypatch):
+    c = _detail_app(tmp_path, monkeypatch)
+    html = c.get("/guests/100").get_data(as_text=True)
+    assert "&lt;i&gt;vmhost&lt;/i&gt;" in html and "<i>vmhost</i>" not in html
+    assert "10.0.0.5" in html and "aa:bb:cc:dd:ee:ff" in html and "127.0.0.1" not in html
+    assert "ext4" in html and "1.0 GiB" in html and "4.0 GiB" in html and "25.0 %" in html
+    assert "tmpfs" not in html
+    assert "0.1 / 0.2 / 0.3" in html and "CPUs: 2" in html
+
+
+def test_guest_detail_unknown_vmid_404(tmp_path, monkeypatch):
+    c = _detail_app(tmp_path, monkeypatch)
+    assert c.get("/guests/999").status_code == 404
+
+
+def test_guest_detail_partial_failure(tmp_path, monkeypatch):
+    from app import proxmox
+    c = _detail_app(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise proxmox.ProxmoxError("x")
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_fsinfo", boom)
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_hostname", boom)
+    r = c.get("/guests/100")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Guest Agent nicht erreichbar" in html
+    assert "10.0.0.5" in html and "0.1 / 0.2 / 0.3" in html
+
+
+def test_guest_detail_lxc_and_stopped(tmp_path, monkeypatch):
+    c = _detail_app(tmp_path, monkeypatch)
+    html = c.get("/guests/101").get_data(as_text=True)
+    assert "10.0.0.6" in html and "nicht unterstützt" in html
+    c = _detail_app(tmp_path, monkeypatch, status="stopped")
+    assert "Gast läuft nicht." in c.get("/guests/100").get_data(as_text=True)

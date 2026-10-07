@@ -29,31 +29,4 @@
       ta.setSelectionRange(head.length, head.length);
     });
   });
-  document.querySelectorAll('.guest-hostname').forEach(function (btn) {
-    var box = btn.closest('.col-base').querySelector('.guest-info');
-    function show(parts) {
-      box.textContent = '';
-      parts.forEach(function (p) {
-        var el = document.createElement(p.pre ? 'pre' : 'div');
-        el.textContent = p.text;
-        box.appendChild(el);
-      });
-      box.hidden = false;
-    }
-    btn.addEventListener('click', function () {
-      show([{ text: 'Lade Gast-Infos …' }]);
-      fetch(btn.getAttribute('data-info-url'), { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
-        .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
-        .then(function (res) {
-          var d = res.d, parts = [];
-          if (!res.ok) { return show([{ text: d.error || 'Fehler beim Laden.' }]); }
-          parts.push({ text: (d.type === 'qemu' ? 'VM' : 'LXC') + ' ' + d.vmid + ' · IP: ' + (d.ips.length ? d.ips.join(', ') : 'unbekannt') });
-          if (d.agent_info) parts.push({ text: d.agent_info, pre: true });
-          if (d.host_info) parts.push({ text: d.host_info, pre: true });
-          if (d.note) parts.push({ text: d.note });
-          show(parts);
-        })
-        .catch(function () { show([{ text: 'Gast-Infos konnten nicht geladen werden.' }]); });
-    });
-  });
 })();
