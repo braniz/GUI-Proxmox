@@ -14,6 +14,8 @@
 <span class="badge type">{{ 'VM' if guest.type == 'qemu' else 'LXC' }}</span>
 <span>VMID {{ guest.vmid }}</span><span class="badge {{ 'ok' if guest.status == 'running' else '' }}">{{ guest.status or 'unbekannt' }}</span>
 <small>Node: {{ guest.node }}{% if guest.cpu is defined %} · CPU {{ guest.cpu|pct }}{% endif %}{% if guest.mem is defined %} · RAM {{ guest.mem|gib }}{% endif %}</small>
+<span class="hover-card"><button type="button" class="hover-trigger" aria-describedby="hi-{{ loop.index }}-{{ state }}">Host-Info</button>
+<span class="hover-content" role="tooltip" id="hi-{{ loop.index }}-{{ state }}">{% if host_info %}<pre>{{ host_info }}</pre>{% else %}Keine Host-Info{% endif %}</span></span>
 </article>
 {% else %}<p class="empty">Keine {{ 'laufenden' if state == 'running' else 'gestoppten' }} Gäste.</p>{% endfor %}
 </section>

@@ -42,6 +42,12 @@ th{background:#e9ecef}
 #todo-dialog{border:0;border-radius:8px;padding:1.2rem;width:min(460px,calc(100% - 3rem));box-shadow:0 4px 20px rgba(0,0,0,.25)}
 #todo-dialog::backdrop{background:rgba(0,0,0,.45)}#todo-form{display:grid;gap:.5rem}#todo-form h2{margin:.2rem 0}
 #todo-form input,#todo-form textarea,#todo-form select{font:inherit;padding:.45rem}.dialog-actions{justify-content:flex-end;margin-top:.6rem}
+.tree .col-extra{display:block}.tree .col-extra>.extra{width:100%;box-sizing:border-box}.tree .extra pre{width:100%;box-sizing:border-box;max-width:none}.tree .extra .comment textarea{min-width:0}
+.hover-card{position:relative;display:inline-block}.hover-trigger{font:inherit;font-size:.8rem;padding:.1rem .5rem;border:1px solid #adb5bd;border-radius:999px;background:#fff;color:#364fc7;cursor:help}
+.hover-content{display:none;position:absolute;z-index:10;left:0;top:100%;margin-top:.3rem;width:max-content;max-width:min(320px,80vw);max-height:14rem;overflow:auto;background:#fff;color:#212529;border:1px solid #ced4da;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);padding:.5rem;font-size:.85rem}
+.hover-content pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}
+.hover-card:hover .hover-content,.hover-card:focus-within .hover-content{display:block}
+.vm-columns{padding-bottom:12rem}
 .empty{color:#666;font-size:.9rem}
 @media(max-width:600px){main{padding:.6rem}.tree ul{margin-left:.5rem}}
 @media(max-width:800px){.tree li{grid-template-columns:1fr}.tree .col+.col{border-left:0;padding-left:0}}
