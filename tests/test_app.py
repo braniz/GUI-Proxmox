@@ -229,11 +229,11 @@ def test_kanban_todo_api_crud_and_validation(tmp_path):
     assert todo["title"] == "Wartung" and todo["vmid"] == "100"
     assert todo["status"] == "planned" and todo["created_at"]
     assert c.get("/api/kanban/todos").get_json() == [todo]
-    assert c.put(f"/api/kanban/todos/{todo['id']}", json={"status": "done"},
+    assert c.put(f"/api/kanban/todos/{todo['id']}", json={"status": "done", "comment": "ok"},
                  headers=headers).get_json()["status"] == "done"
-    assert c.put(f"/api/kanban/todos/{todo['id']}", json={"status": "invalid"},
+    assert c.put(f"/api/kanban/todos/{todo['id']}", json={"status": "invalid", "comment": "x"},
                  headers=headers).status_code == 400
-    assert c.delete(f"/api/kanban/todos/{todo['id']}", headers=headers).status_code == 204
+    assert c.delete(f"/api/kanban/todos/{todo['id']}", json={"comment": "weg"}, headers=headers).status_code == 204
     assert c.get("/api/kanban/todos").get_json() == []
 
 
@@ -427,3 +427,88 @@ def test_disabling_service_closes_auto_todo_with_comment(tmp_path, monkeypatch):
     assert auto["comments"][0]["author"] == "admin"
     assert "http" in auto["comments"][0]["text"] and "nicht benötigt" in auto["comments"][0]["text"]
     assert by_id[other["id"]]["status"] == "planned" and "comments" not in by_id[other["id"]]
+
+
+def _bulk_setup(tmp_path, n=3):
+    app = create_app({"TESTING": True, "SECRET_KEY": "t", "ADMIN_PASSWORD_HASH": generate_password_hash("pw"),
+                      "KANBAN_TODOS_DB": str(tmp_path / "todos.json")})
+    c = app.test_client()
+    _login(c)
+    h = {"X-CSRF-Token": token(c, "/kanban")}
+    ids = [c.post("/api/kanban/todos", json={"title": f"T{i}"}, headers=h).get_json()["id"] for i in range(n)]
+    return c, h, ids
+
+
+def _by_id(c):
+    return {t["id"]: t for t in c.get("/api/kanban/todos").get_json()}
+
+
+def test_bulk_move_edit_done_and_untouched(tmp_path):
+    c, h, ids = _bulk_setup(tmp_path)
+    url = "/api/kanban/todos/bulk"
+    r = c.post(url, json={"ids": ids[:2], "action": "move", "status": "in_progress", "comment": "los"}, headers=h)
+    assert r.status_code == 200 and all(x["ok"] for x in r.get_json()["results"])
+    todos = _by_id(c)
+    assert [todos[i]["status"] for i in ids] == ["in_progress", "in_progress", "planned"]
+    assert len(todos[ids[2]]["history"]) == 1
+    entry = todos[ids[0]]["history"][-1]
+    assert entry["action"] == "move" and entry["comment"] == "los" and entry["user"] == "admin" and entry["time"]
+    assert c.post(url, json={"ids": ids[:2], "action": "edit", "title": "Neu", "vmid": "5",
+                             "comment": "k"}, headers=h).status_code == 200
+    assert c.post(url, json={"ids": [ids[0]], "action": "done", "comment": "fertig"}, headers=h).status_code == 200
+    todos = _by_id(c)
+    assert todos[ids[0]]["title"] == "Neu" and todos[ids[0]]["vmid"] == "5" and todos[ids[0]]["status"] == "done"
+    assert todos[ids[1]]["status"] == "in_progress" and todos[ids[2]]["title"] == "T2"
+    r = c.post(url, json={"ids": [ids[0], "nope"], "action": "move", "status": "planned", "comment": "x"}, headers=h)
+    assert [x["ok"] for x in r.get_json()["results"]] == [True, False]
+
+
+def test_bulk_delete_keeps_audit_log(tmp_path):
+    c, h, ids = _bulk_setup(tmp_path)
+    r = c.post("/api/kanban/todos/bulk", json={"ids": ids[:2], "action": "delete", "comment": "weg"}, headers=h)
+    assert r.status_code == 200
+    assert list(_by_id(c)) == [ids[2]]
+    import json
+    log = json.loads((tmp_path / "todos-audit.json").read_text(encoding="utf-8"))
+    assert {i["id"] for i in log} == set(ids[:2])
+    assert log[0]["history"][-1]["action"] == "delete" and log[0]["history"][-1]["user"] == "admin"
+
+
+def test_bulk_requires_comment_and_valid_input(tmp_path):
+    c, h, ids = _bulk_setup(tmp_path, 1)
+    url = "/api/kanban/todos/bulk"
+    for comment in (None, "", "   ", 5):
+        body = {"ids": ids, "action": "done"}
+        if comment is not None:
+            body["comment"] = comment
+        assert c.post(url, json=body, headers=h).status_code == 400
+    assert c.post(url, json={"ids": ids, "action": "bogus", "comment": "x"}, headers=h).status_code == 400
+    assert c.post(url, json={"ids": [], "action": "done", "comment": "x"}, headers=h).status_code == 400
+    assert c.post(url, json={"ids": ids, "action": "move", "status": "x", "comment": "x"}, headers=h).status_code == 400
+    assert c.post(url, json={"ids": ids, "action": "edit", "comment": "x"}, headers=h).status_code == 400
+    assert c.put(f"/api/kanban/todos/{ids[0]}", json={"status": "done"}, headers=h).status_code == 400
+    assert c.delete(f"/api/kanban/todos/{ids[0]}", headers=h).status_code == 400
+    assert _by_id(c)[ids[0]]["status"] == "planned"
+
+
+def test_history_is_server_generated_and_immutable(tmp_path):
+    c, h, ids = _bulk_setup(tmp_path, 1)
+    forged = {"time": "2000-01-01T00:00:00+00:00", "user": "mallory", "action": "x", "comment": "f"}
+    c.post("/api/kanban/todos/bulk", json={"ids": ids, "action": "done", "comment": "ok", "user": "mallory",
+                                           "time": forged["time"], "history": [forged]}, headers=h)
+    c.put(f"/api/kanban/todos/{ids[0]}", json={"title": "N", "comment": "ed", "user": "mallory",
+                                               "history": [forged], "time": forged["time"]}, headers=h)
+    history = _by_id(c)[ids[0]]["history"]
+    assert [e["action"] for e in history] == ["create", "done", "edit"]
+    assert all(e["user"] == "admin" and e["time"].startswith(("202", "203")) for e in history)
+    assert forged not in history
+
+
+def test_bulk_requires_login_and_csrf(tmp_path):
+    c, h, ids = _bulk_setup(tmp_path, 1)
+    body = {"ids": ids, "action": "done", "comment": "x"}
+    assert c.post("/api/kanban/todos/bulk", json=body).status_code == 400
+    assert c.post("/api/kanban/todos/bulk", json=body, headers={"X-CSRF-Token": "bad"}).status_code == 400
+    assert _by_id(c)[ids[0]]["status"] == "planned"
+    anon = c.application.test_client()
+    assert anon.post("/api/kanban/todos/bulk", json=body, headers=h).status_code == 302

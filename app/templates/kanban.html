@@ -26,10 +26,18 @@
 <section class="todo-section">
 <div class="todo-heading"><h2>Geplante ToDos</h2><button id="add-todo" type="button">ToDo hinzufügen</button></div>
 <p id="todo-error" class="error" hidden></p>
+<div id="bulk-toolbar" class="bulk-toolbar" hidden>
+<strong><span id="bulk-count">0</span> ausgewählt</strong>
+<button type="button" data-bulk="move">Verschieben</button>
+<button type="button" data-bulk="edit">Bearbeiten</button>
+<button type="button" data-bulk="done">Erledigen</button>
+<button type="button" data-bulk="delete">Löschen</button>
+<button type="button" id="bulk-clear">Auswahl aufheben</button>
+</div>
 <div class="todo-columns">
 {% for status, label in [('planned', 'Geplant / ToDo'), ('in_progress', 'In Arbeit'), ('done', 'Erledigt')] %}
 <section class="kanban-column todo-column" data-status="{{ status }}">
-<h3>{{ label }}</h3><div class="todo-cards"></div>
+<h3>{{ label }}</h3><label class="select-all"><input type="checkbox" class="select-column"> Alle auswählen</label><div class="todo-cards"></div>
 </section>
 {% endfor %}
 </div>
@@ -44,7 +52,28 @@
 <select id="todo-vmid" name="vmid"><option value="">Keine Zuordnung</option>
 {% for guest in guests %}<option value="{{ guest.vmid }}">{{ guest.name or 'Unbenannt' }} ({{ guest.vmid }})</option>{% endfor %}
 </select>
+<div><label for="todo-comment">Kommentar (Pflicht)</label><textarea id="todo-comment" name="comment" maxlength="1000" rows="2"></textarea></div>
 <div class="dialog-actions"><button type="button" id="cancel-todo">Abbrechen</button><button type="submit">Speichern</button></div>
+</form>
+</dialog>
+<dialog id="action-dialog">
+<form id="action-form">
+<h2 id="action-title">Aktion</h2>
+<div id="action-fields">
+<div data-for="move"><label for="action-status">Neuer Status</label>
+<select id="action-status"><option value="planned">Geplant / ToDo</option><option value="in_progress">In Arbeit</option><option value="done">Erledigt</option></select></div>
+<div data-for="edit"><p>Nur ausgefüllte Felder werden für alle ausgewählten ToDos übernommen.</p>
+<label for="action-todo-title">Titel</label><input id="action-todo-title" maxlength="200">
+<label for="action-todo-description">Beschreibung</label><textarea id="action-todo-description" maxlength="5000" rows="3"></textarea>
+<label for="action-todo-vmid">VM</label>
+<select id="action-todo-vmid"><option value="">Nicht ändern</option><option value="__none__">Keine Zuordnung</option>
+{% for guest in guests %}<option value="{{ guest.vmid }}">{{ guest.name or 'Unbenannt' }} ({{ guest.vmid }})</option>{% endfor %}
+</select></div>
+</div>
+<label for="action-comment">Kommentar (Pflicht)</label>
+<textarea id="action-comment" maxlength="1000" rows="3" required></textarea>
+<p id="action-error" class="error" hidden></p>
+<div class="dialog-actions"><button type="button" id="cancel-action">Abbrechen</button><button type="submit">Ausführen</button></div>
 </form>
 </dialog>
 <meta name="csrf-token" content="{{ csrf_token() }}">
