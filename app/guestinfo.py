@@ -63,12 +63,25 @@ def extract_lxc_ips(data):
 
 
 def parse_service_ports(spec):
-    """'22:ssh,80:http' -> [(22, 'ssh'), (80, 'http')]; ungültige Einträge werden ignoriert."""
+    """Unterstützt sowohl '22:ssh' als auch 'ssh:22' und liefert [(22, 'ssh')] zurück."""
     ports = []
     for part in (spec or "").split(","):
-        num, _, label = part.strip().partition(":")
-        if num.isdigit() and 0 < int(num) < 65536:
-            ports.append((int(num), label.strip() or num))
+        left, _, right = part.strip().partition(":")
+        left, right = left.strip(), right.strip()
+        if not left:
+            continue
+
+        # Format A: port:label (z. B. 22:ssh)
+        if left.isdigit() and 0 < int(left) < 65536:
+            label = right or left
+            ports.append((int(left), label))
+            continue
+
+        # Format B: label:port (z. B. ssh:22)
+        if right.isdigit() and 0 < int(right) < 65536:
+            label = left or right
+            ports.append((int(right), label))
+            continue
     return ports
 
 

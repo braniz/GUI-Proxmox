@@ -118,9 +118,9 @@ def test_extract_ips():
 
 def test_services_and_ports():
     from app.guestinfo import detect_services, parse_service_ports
-    ports = parse_service_ports("22:ssh,80:http,x:bad,443")
-    assert ports == [(22, "ssh"), (80, "http"), (443, "443")]
-    assert detect_services("1.2.3.4", ports, checker=lambda ip, p, t: p == 22) == ["ssh"]
+    ports = parse_service_ports("22:ssh,80:http,x:bad,443,ssh:22,http:80")
+    assert ports == [(22, "ssh"), (80, "http"), (443, "443"), (22, "ssh"), (80, "http")]
+    assert detect_services("1.2.3.4", ports, checker=lambda ip, p, t: p == 22) == ["ssh", "ssh"]
     assert detect_services(None, ports) == []
 
 
