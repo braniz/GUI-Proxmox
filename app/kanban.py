@@ -63,6 +63,21 @@ class TodoStore:
             self._write(todos)
         return todo
 
+    def close_auto(self, keys, comment):
+        """Setzt offene Auto-ToDos mit passendem auto_key auf done und fügt einen Kommentar hinzu."""
+        keys = set(keys)
+        closed = []
+        with self._lock:
+            todos = self._read()
+            for t in todos:
+                if t.get("auto_key") in keys and t.get("status") != "done":
+                    t["status"] = "done"
+                    t.setdefault("comments", []).append(comment)
+                    closed.append(t)
+            if closed:
+                self._write(todos)
+        return closed
+
     def update(self, todo_id, changes):
         with self._lock:
             todos = self._read()
