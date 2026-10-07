@@ -11,6 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 MAX_COMMENT_LEN = 2000
 MAX_HOST_INFO_BYTES = 8 * 1024
 HOST_INFO_PATH = "/srv/info/host.info"
+OS_RELEASE_PATH = "/etc/os-release"
+REBOOT_REQUIRED_PATH = "/var/run/reboot-required"
+UPDATES_AVAILABLE_PATH = "/var/lib/update-notifier/updates-available"
+DEBIAN_LIKE = {"debian", "ubuntu", "linuxmint", "raspbian", "pop"}
 DEFAULT_SERVICE_PORTS = "22:ssh,80:http,443:https"
 
 
@@ -91,6 +95,53 @@ def clean_host_info(data, limit=MAX_HOST_INFO_BYTES):
         return None
     raw = content.encode("utf-8", "replace")[:limit]
     return raw.decode("utf-8", "replace")
+
+
+def parse_os_ids(data):
+    """Menge aus ID/ID_LIKE einer os-release-Antwort (file-read); leer wenn unbekannt."""
+    content = data.get("content") if isinstance(data, dict) else None
+    ids = set()
+    for line in content.splitlines() if isinstance(content, str) else []:
+        key, _, val = line.partition("=")
+        if key in ("ID", "ID_LIKE"):
+            ids.update(val.strip().strip("\"'").lower().split())
+    return ids
+
+
+def parse_updates_count(data):
+    """Anzahl aus /var/lib/update-notifier/updates-available ("N updates can be applied ..."); None wenn unklar."""
+    content = data.get("content") if isinstance(data, dict) else None
+    if not isinstance(content, str):
+        return None
+    for line in content.splitlines():
+        head = line.strip().split(" ", 1)[0]
+        if head.isdigit() and "update" in line:
+            return int(head)
+    return 0 if "0 updates" in content or "0 Aktualisierungen" in content else None
+
+
+def update_status(read_file):
+    """Ermittelt (updates_available, reboot_required) mit Werten True/False/None (unbekannt).
+
+    read_file(path) liest per Guest Agent (file-read, nur lesend) und wirft bei Fehlern
+    ProxmoxError/ValueError/TypeError. Unterstützt: Debian-artige Linux-Gäste; sonst unbekannt.
+    """
+    try:
+        ids = parse_os_ids(read_file(OS_RELEASE_PATH))
+    except Exception:
+        return None, None
+    if not ids & DEBIAN_LIKE:
+        return None, None
+    try:
+        read_file(REBOOT_REQUIRED_PATH)
+        reboot = True
+    except Exception:
+        reboot = False
+    try:
+        count = parse_updates_count(read_file(UPDATES_AVAILABLE_PATH))
+    except Exception:
+        count = None
+    return (None if count is None else count > 0), reboot
 
 
 def apply_comment_prefix(old, submitted, user, now=None):

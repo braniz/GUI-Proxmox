@@ -15,7 +15,9 @@
 <span class="badge {{ 'ok' if g.status == 'running' else '' }}">{{ g.status }}</span></div>
 <div class="col col-status"><span class="meta">CPU {{ g.cpu|pct }} · RAM {{ g.mem|gib }} / {{ g.maxmem|gib }}</span>
 {% if g.status == 'running' %}<span class="meta">IP: {{ g.ips|join(', ') if g.ips else 'unbekannt' }}</span>
-{% for s in g.services %}<span class="badge ok">{{ s }}</span>{% endfor %}{% endif %}</div>
+{% for s in g.services %}<span class="badge ok">{{ s }}</span>{% endfor %}
+<span class="meta update-status">Update vorhanden: {{ 'Ja' if g.updates_available is true else ('Nein' if g.updates_available is false else 'Unbekannt') }}</span>
+<span class="meta reboot-status">Reboot nötig: {{ 'Ja' if g.reboot_required is true else ('Nein' if g.reboot_required is false else 'Unbekannt') }}</span>{% endif %}</div>
 <div class="col col-extra"><details class="extra"><summary>Host-Info &amp; Kommentar</summary>
 {% if g.host_info %}<pre>{{ g.host_info }}</pre>{% endif %}
 <form method="post" action="{{ url_for('save_comment', vmid=g.vmid) }}" class="comment">

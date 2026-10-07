@@ -1,6 +1,7 @@
 import hmac
 import os
 import secrets
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from functools import wraps
@@ -12,10 +13,12 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
 from werkzeug.security import check_password_hash
 
 from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
-                        clean_host_info, detect_services, extract_lxc_ips,
+                        clean_host_info, detect_services, update_status, extract_lxc_ips,
                         extract_qemu_ips, parse_service_ports)
 from .kanban import TodoStore, read_host_info, validate_todo_fields
 from .proxmox import ProxmoxClient, ProxmoxError
+
+UPDATE_CACHE_TTL = 300  # Sekunden
 
 # Hash zum Angleichen der Laufzeit bei unbekanntem Benutzer
 _DUMMY_HASH = "scrypt:32768:8:1$dummy$" + "0" * 128
@@ -111,9 +114,12 @@ def create_app(config=None):
     def todos():
         return TodoStore(app.config["KANBAN_TODOS_DB"])
 
+    update_cache = {}
+
     def enrich_guest(c, g, ports, saved):
         """Ergänzt IPs, Dienste und host.info; Fehler pro Gast werden abgefangen."""
         g["ips"], g["services"], g["host_info"] = [], [], None
+        g["updates_available"] = g["reboot_required"] = None
         g["comment"] = saved.get(str(g.get("vmid")), "")
         if g.get("status") != "running":
             return g
@@ -133,7 +139,21 @@ def create_app(config=None):
                     c.qemu_file_read(g.get("node"), g.get("vmid"), HOST_INFO_PATH))
             except (ProxmoxError, ValueError, TypeError):
                 pass
+            g["updates_available"], g["reboot_required"] = cached_update_status(c, g)
         return g
+
+    def cached_update_status(c, g):
+        key, now = (g.get("node"), g.get("vmid")), time.monotonic()
+        hit = update_cache.get(key)
+        if hit and now - hit[0] < UPDATE_CACHE_TTL:
+            return hit[1]
+        try:
+            result = update_status(
+                lambda path: c.qemu_file_read(g.get("node"), g.get("vmid"), path))
+        except Exception:
+            result = (None, None)
+        update_cache[key] = (now, result)
+        return result
 
     def login_required(view):
         @wraps(view)

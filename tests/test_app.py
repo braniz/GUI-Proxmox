@@ -267,3 +267,50 @@ def test_kanban_shows_guest_host_info(tmp_path, monkeypatch):
     assert "Keine Host-Info" in html
     assert "hover-trigger" not in html
     assert "class=\"hostname\" tabindex=\"0\"" in html
+
+
+def test_update_status_helpers():
+    from app.guestinfo import update_status
+    files = {"/etc/os-release": {"content": 'ID=ubuntu\nID_LIKE=debian\n'},
+             "/var/run/reboot-required": {"content": "*** System restart required ***"},
+             "/var/lib/update-notifier/updates-available": {"content": "\n5 updates can be applied immediately.\n"}}
+
+    def reader(path):
+        if path not in files:
+            raise ValueError("nicht gefunden")
+        return files[path]
+    assert update_status(reader) == (True, True)
+    del files["/var/run/reboot-required"]
+    files["/var/lib/update-notifier/updates-available"] = {"content": "0 updates can be applied."}
+    assert update_status(reader) == (False, False)
+    del files["/var/lib/update-notifier/updates-available"]
+    assert update_status(reader) == (None, False)
+    files["/etc/os-release"] = {"content": "ID=alpine"}
+    assert update_status(reader) == (None, None)
+    assert update_status(lambda p: (_ for _ in ()).throw(TimeoutError())) == (None, None)
+
+
+def test_guests_page_update_status(tmp_path, monkeypatch):
+    from app import proxmox
+    app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True, "COMMENTS_DB": str(tmp_path / "c.json"),
+                      "SERVICE_CHECK": False, "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
+    c = app.test_client()
+    P = proxmox.ProxmoxClient
+    monkeypatch.setattr(P, "nodes", lambda s: [{"node": "n1", "status": "online"}])
+    monkeypatch.setattr(P, "guests", lambda s: [
+        {"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": "running"},
+        {"node": "n1", "vmid": 101, "name": "ct", "type": "lxc", "status": "running"}])
+    monkeypatch.setattr(P, "qemu_interfaces", lambda s, n, v: [])
+
+    def read(s, n, v, p):
+        if p == "/etc/os-release":
+            return {"content": "ID=debian"}
+        if p == "/var/run/reboot-required":
+            return {"content": "x"}
+        raise proxmox.ProxmoxError("fehlt")
+    monkeypatch.setattr(P, "qemu_file_read", read)
+    monkeypatch.setattr(P, "lxc_interfaces", lambda s, n, v: [])
+    _login(c)
+    html = c.get("/guests").get_data(as_text=True)
+    assert "Update vorhanden: Unbekannt" in html
+    assert html.count("Reboot nötig: Ja") == 1 and html.count("Reboot nötig: Unbekannt") == 1
