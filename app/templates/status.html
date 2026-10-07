@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Status &amp; Sicherheit</h1>
+{% if st %}
+{% for w in st.warnings %}<div class="warn">&#9888; {{ w }}</div>{% endfor %}
+<div class="cards">
+<div class="card"><h2>Cluster</h2>
+<p>{% if st.cluster_name %}Name: {{ st.cluster_name }}<br>{% endif %}
+Quorum: {% if st.quorate is none %}<span class="badge">unbekannt</span>
+{% elif st.quorate %}<span class="badge ok">ja</span>{% else %}<span class="badge bad">nein</span>{% endif %}</p></div>
+<div class="card"><h2>Sicherheit</h2>
+<p>SSL-Prüfung: {% if st.ssl is sameas false %}<span class="badge bad">deaktiviert</span>
+{% elif st.ssl is sameas true %}<span class="badge ok">aktiv</span>
+{% else %}<span class="badge ok">CA-Datei</span>{% endif %}</p>
+<p>Hinweis: Sitzung läuft nach 60 Minuten ab; bitte nach Gebrauch abmelden.</p></div>
+</div>
+<table><tr><th>Node</th><th>Status</th><th>Proxmox VE</th><th>Release</th><th>Repo-ID</th></tr>
+{% for n in st.nodes %}<tr><td>{{ n.name }}</td>
+<td><span class="badge {{ 'ok' if n.online else 'bad' }}">{{ 'online' if n.online else 'offline' }}</span></td>
+<td>{{ n.version or '-' }}</td><td>{{ n.release or '-' }}</td><td>{{ n.repoid or '-' }}</td></tr>
+{% else %}<tr><td colspan="5">Keine Nodes verfügbar.</td></tr>{% endfor %}</table>
+{% endif %}
+<div class="card" style="margin-top:1rem"><h2>Info / Hinweis</h2>
+<p>Verfügbare Paket-Updates und ausstehende Neustarts werden hier bewusst nicht angezeigt: Die Liste
+(<code>/nodes/{node}/apt/update</code>) wird nur durch ein Update-Kommando aktualisiert, und diese Anwendung ist strikt read-only.
+Bitte Updates direkt in der Proxmox-Oberfläche unter Node &rarr; Updates prüfen.</p></div>
+{% endblock %}

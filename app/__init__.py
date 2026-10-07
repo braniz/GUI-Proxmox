@@ -37,6 +37,31 @@ def group_guests_by_node(nodes, guests):
     return [dict(name=k, **v) for k, v in sorted(tree.items(), key=lambda kv: str(kv[0]))]
 
 
+def build_status(cluster, nodes, versions, verify_ssl):
+    """Leitet Status- und Sicherheitshinweise aus read-only Daten ab (keine Update-Daten erfunden)."""
+    cl = next((e for e in cluster or [] if e.get("type") == "cluster"), None)
+    quorate = None if cl is None or cl.get("quorate") is None else bool(cl.get("quorate"))
+    rows = []
+    for n in nodes or []:
+        v = (versions or {}).get(n.get("node")) or {}
+        rows.append({"name": n.get("node"), "online": n.get("status") == "online",
+                     "version": v.get("version"), "release": v.get("release"),
+                     "repoid": v.get("repoid")})
+    warnings = []
+    if verify_ssl is False:
+        warnings.append("SSL-Prüfung ist deaktiviert (PVE_VERIFY_SSL=false). "
+                        "Verbindung zu Proxmox ist anfällig für Man-in-the-Middle.")
+    if quorate is False:
+        warnings.append("Cluster hat kein Quorum.")
+    for r in rows:
+        if not r["online"]:
+            warnings.append(f"Node {r['name']} ist nicht online.")
+    if len({r["version"] for r in rows if r["version"]}) > 1:
+        warnings.append("Nodes laufen mit unterschiedlichen Proxmox-VE-Versionen.")
+    return {"nodes": rows, "quorate": quorate, "cluster_name": cl.get("name") if cl else None,
+            "ssl": verify_ssl, "warnings": warnings}
+
+
 def create_app(config=None):
     load_dotenv()
     app = Flask(__name__)
@@ -156,6 +181,21 @@ def create_app(config=None):
     @login_required
     def storage():
         return page("storage.html", storage=lambda: client().storage())
+
+    @app.route("/status")
+    @login_required
+    def status():
+        def build():
+            c = client()
+            ns = c.nodes()
+            versions = {}
+            for n in ns:
+                try:
+                    versions[n.get("node")] = c.node_version(n.get("node"))
+                except ProxmoxError:
+                    versions[n.get("node")] = None
+            return build_status(c.cluster_status(), ns, versions, app.config["PVE_VERIFY_SSL"])
+        return page("status.html", st=build)
 
     @app.template_filter("gib")
     def gib(v):
