@@ -20,10 +20,10 @@
 <span class="meta reboot-status">Reboot nötig: {{ 'Ja' if g.reboot_required is true else ('Nein' if g.reboot_required is false else 'Unbekannt') }}</span>{% endif %}</div>
 <div class="col col-extra"><details class="extra"><summary>Host-Info &amp; Kommentar</summary>
 {% if g.host_info %}<pre>{{ g.host_info }}</pre>{% endif %}
-<form method="post" action="{{ url_for('save_comment', vmid=g.vmid) }}" class="comment">
+<form method="post" action="{{ url_for('save_comment', vmid=g.vmid) }}" class="comment" data-user="{{ session.get('user', '') }}">
 <input type="hidden" name="csrf" value="{{ csrf_token() }}">
 <textarea name="comment" rows="2" maxlength="{{ max_comment }}" placeholder="Kommentar">{{ g.comment }}</textarea>
-<button type="submit">Speichern</button></form></details></div></li>{% endfor %}
+<button type="button" class="comment-new">Neu</button> <button type="submit">Speichern</button></form></details></div></li>{% endfor %}
 </ul>{% else %}<ul><li class="meta">Keine Gäste</li></ul>{% endif %}
 </details>
 {% endfor %}
