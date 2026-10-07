@@ -1,6 +1,7 @@
 """Hilfsfunktionen für Gast-Details: IP-Extraktion, Port-Check, Kommentar-Speicher, host.info."""
 import ipaddress
 import json
+from datetime import datetime
 import os
 import socket
 import tempfile
@@ -90,6 +91,26 @@ def clean_host_info(data, limit=MAX_HOST_INFO_BYTES):
         return None
     raw = content.encode("utf-8", "replace")[:limit]
     return raw.decode("utf-8", "replace")
+
+
+def apply_comment_prefix(old, submitted, user, now=None):
+    """Stellt neuen Kommentarzeilen "[Datum Zeit] User: " voran; bereits gespeicherte Zeilen bleiben unverändert."""
+    old_lines = (old or "").replace("\r\n", "\n").split("\n")
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
+    prefix = f"[{stamp}] {user or 'unbekannt'}: "
+    out, in_new = [], False
+    for line in (submitted or "").replace("\r\n", "\n").strip().split("\n"):
+        line = line.rstrip()
+        if line in old_lines and line:
+            old_lines.remove(line)
+            out.append(line)
+            in_new = False
+        elif not line:
+            out.append(line)
+        else:
+            out.append(line if in_new else prefix + line)
+            in_new = True
+    return "\n".join(out).strip()
 
 
 class CommentStore:

@@ -11,7 +11,7 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
                    session, url_for)
 from werkzeug.security import check_password_hash
 
-from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore,
+from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
                         clean_host_info, detect_services, extract_lxc_ips,
                         extract_qemu_ips, parse_service_ports)
 from .kanban import TodoStore, read_host_info, validate_todo_fields
@@ -232,7 +232,8 @@ def create_app(config=None):
     @login_required
     def save_comment(vmid):
         check_csrf()
-        text = request.form.get("comment", "")
+        text = apply_comment_prefix(comments().get(vmid), request.form.get("comment", ""),
+                                    session.get("user"))
         if len(text.strip()) > MAX_COMMENT_LEN:
             flash(f"Kommentar zu lang (max. {MAX_COMMENT_LEN} Zeichen).")
         else:
@@ -268,7 +269,10 @@ def create_app(config=None):
     def kanban():
         guests, error = [], None
         try:
-            guests = client().guests()
+            c = client()
+            guests = c.guests()
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                guests = list(pool.map(lambda g: enrich_guest(c, g, {}, {}), guests))
         except ProxmoxError as exc:
             error = str(exc)
         return render_template(
