@@ -22,6 +22,8 @@ from .kanban import (
 from .proxmox import ProxmoxClient, ProxmoxError
 
 UPDATE_CACHE_TTL = 300  # Sekunden
+AGENT_INFO_PATH = "/var/lib/prox-agent/info.json"
+AGENT_INFO_LIMIT = 32 * 1024
 
 # Hash zum Angleichen der Laufzeit bei unbekanntem Benutzer
 _DUMMY_HASH = "scrypt:32768:8:1$dummy$" + "0" * 128
@@ -278,6 +280,42 @@ def create_app(config=None):
                 gs = list(pool.map(lambda g: enrich_guest(c, g, ports, saved), gs))
             return group_guests_by_node(c.nodes(), gs)
         return page("guests.html", tree=tree, max_comment=lambda: MAX_COMMENT_LEN)
+
+    @app.route("/guests/<int:vmid>/info")
+    @login_required
+    def guest_info(vmid):
+        """Liest alle verfügbaren Infos eines Gasts über die Gasterweiterung (Guest Agent / prox-agent)."""
+        c = client()
+        try:
+            g = next((x for x in c.guests() if x.get("vmid") == vmid), None)
+        except ProxmoxError:
+            return jsonify(error="Proxmox nicht erreichbar."), 502
+        if g is None:
+            return jsonify(error="Gast nicht gefunden."), 404
+        node, kind = g.get("node"), g.get("type")
+        out = {"vmid": vmid, "name": g.get("name"), "type": kind, "ips": [],
+               "agent_info": None, "host_info": None, "note": None}
+        if g.get("status") != "running":
+            out["note"] = "Gast läuft nicht."
+            return jsonify(out)
+        try:
+            if kind == "qemu":
+                out["ips"] = extract_qemu_ips(c.qemu_interfaces(node, vmid))
+            else:
+                out["ips"] = extract_lxc_ips(c.lxc_interfaces(node, vmid))
+        except (ProxmoxError, ValueError, TypeError):
+            pass
+        if kind == "qemu":
+            for key, path in (("agent_info", AGENT_INFO_PATH), ("host_info", HOST_INFO_PATH)):
+                try:
+                    out[key] = clean_host_info(c.qemu_file_read(node, vmid, path), AGENT_INFO_LIMIT)
+                except (ProxmoxError, ValueError, TypeError):
+                    pass
+            if not (out["agent_info"] or out["host_info"]):
+                out["note"] = "Keine Daten der Gasterweiterung verfügbar."
+        else:
+            out["note"] = "LXC: Die Proxmox-API bietet keine Gasterweiterung zum Dateilesen; nur Netzwerkdaten."
+        return jsonify(out)
 
     @app.route("/guests/<int:vmid>/comment", methods=["POST"])
     @login_required
