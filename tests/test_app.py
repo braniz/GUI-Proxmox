@@ -19,7 +19,8 @@ def token(c, url="/login"):
 
 
 def test_protected_redirects(client):
-    for path in ("/", "/nodes", "/guests", "/storage", "/status"):
+    for path in ("/", "/nodes", "/guests", "/storage", "/status", "/kanban",
+                 "/api/kanban/todos"):
         r = client.get(path)
         assert r.status_code == 302 and "/login" in r.headers["Location"]
 
@@ -171,3 +172,63 @@ def test_guests_page_enriched(tmp_path, monkeypatch):
     html = c.get("/guests").get_data(as_text=True)
     assert "10.0.0.5" in html and "unbekannt" in html
     assert "&lt;script&gt;x" in html and "<script>x" not in html
+
+
+def test_kanban_todo_api_crud_and_validation(tmp_path):
+    app = create_app({
+        "SECRET_KEY": "x" * 32, "TESTING": True,
+        "ADMIN_PASSWORD_HASH": generate_password_hash("pw"),
+        "KANBAN_TODOS_DB": str(tmp_path / "todos.json"),
+    })
+    c = app.test_client()
+    assert c.post("/api/kanban/todos", json={"title": "Aufgabe"}).status_code == 302
+    _login(c)
+    assert c.post("/api/kanban/todos", json={"title": "Aufgabe"}).status_code == 400
+    csrf = token(c, "/kanban")
+    headers = {"X-CSRF-Token": csrf}
+    created = c.post("/api/kanban/todos", json={
+        "title": "Wartung", "description": "Host prüfen", "vmid": 100,
+    }, headers=headers)
+    assert created.status_code == 201
+    todo = created.get_json()
+    assert todo["title"] == "Wartung" and todo["vmid"] == "100"
+    assert todo["status"] == "planned" and todo["created_at"]
+    assert c.get("/api/kanban/todos").get_json() == [todo]
+    assert c.put(f"/api/kanban/todos/{todo['id']}", json={"status": "done"},
+                 headers=headers).get_json()["status"] == "done"
+    assert c.put(f"/api/kanban/todos/{todo['id']}", json={"status": "invalid"},
+                 headers=headers).status_code == 400
+    assert c.delete(f"/api/kanban/todos/{todo['id']}", headers=headers).status_code == 204
+    assert c.get("/api/kanban/todos").get_json() == []
+
+
+def test_kanban_page_host_info_and_proxmox_failure(tmp_path, monkeypatch):
+    from app import proxmox
+    app = create_app({
+        "SECRET_KEY": "x" * 32, "TESTING": True,
+        "ADMIN_PASSWORD_HASH": generate_password_hash("pw"),
+        "KANBAN_TODOS_DB": str(tmp_path / "todos.json"),
+        "HOST_INFO_FILE": str(tmp_path / "host.info"),
+    })
+    (tmp_path / "host.info").write_text("<script>nicht ausführen</script>\n", encoding="utf-8")
+
+    def unavailable(_):
+        raise proxmox.ProxmoxError("Proxmox nicht erreichbar")
+
+    monkeypatch.setattr(proxmox.ProxmoxClient, "guests", unavailable)
+    c = app.test_client()
+    _login(c)
+    html = c.get("/kanban").get_data(as_text=True)
+    assert "Proxmox nicht erreichbar" in html
+    assert "&lt;script&gt;nicht ausführen&lt;/script&gt;" in html
+    assert "<script>nicht ausführen</script>" not in html
+    assert "Geplant / ToDo" in html and "In Arbeit" in html and "Erledigt" in html
+
+
+def test_read_host_info_is_optional_and_limited(tmp_path):
+    from app.kanban import read_host_info
+    missing = tmp_path / "missing.info"
+    assert read_host_info(str(missing)) is None
+    path = tmp_path / "host.info"
+    path.write_bytes(b"a" * (64 * 1024 + 10))
+    assert len(read_host_info(str(path))) == 64 * 1024

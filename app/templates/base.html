@@ -28,12 +28,24 @@ th{background:#e9ecef}
 .card h2{margin-top:0;font-size:1.1rem}
 .warn{background:#fff3bf;padding:.6rem;border-radius:4px;margin-bottom:.5rem}
 .tree .comment{flex-basis:100%;display:flex;gap:.5rem;align-items:flex-start}.tree .comment textarea{flex:1;font:inherit}.tree .info{flex-basis:100%}.tree .info pre{white-space:pre-wrap;background:#f4f5f7;padding:.5rem;margin:.3rem 0}
+.kanban-column{background:#e9ecef;border-radius:8px;padding:.8rem;min-width:220px;flex:1}
+.kanban-column h3{margin:.1rem 0 .8rem;font-size:1rem}
+.todo-columns,.vm-columns{display:flex;gap:1rem;align-items:flex-start;overflow-x:auto;margin:1rem 0 2rem}
+.kanban-card{background:#fff;border-radius:6px;box-shadow:0 1px 3px rgba(0,0,0,.12);padding:.8rem;margin-bottom:.7rem;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.todo-card{cursor:grab}.todo-card:active{cursor:grabbing}.kanban-card small{flex-basis:100%;color:#555}
+.todo-card p{flex-basis:100%;white-space:pre-wrap;margin:.2rem 0}.todo-card .todo-actions{display:flex;gap:.4rem;margin-left:auto}
+.todo-heading,.dialog-actions{display:flex;gap:.6rem;align-items:center;justify-content:space-between}
+.todo-heading h2{margin-bottom:0}.host-info pre{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:0}
+#todo-dialog{border:0;border-radius:8px;padding:1.2rem;width:min(460px,calc(100% - 3rem));box-shadow:0 4px 20px rgba(0,0,0,.25)}
+#todo-dialog::backdrop{background:rgba(0,0,0,.45)}#todo-form{display:grid;gap:.5rem}#todo-form h2{margin:.2rem 0}
+#todo-form input,#todo-form textarea,#todo-form select{font:inherit;padding:.45rem}.dialog-actions{justify-content:flex-end;margin-top:.6rem}
+.empty{color:#666;font-size:.9rem}
 @media(max-width:600px){main{padding:.6rem}.tree ul{margin-left:.5rem}}
 </style></head><body>
 {% if session.user %}
 <nav><a href="{{ url_for('overview') }}">Übersicht</a><a href="{{ url_for('nodes') }}">Nodes</a>
 <a href="{{ url_for('guests') }}">VMs / Container</a><a href="{{ url_for('storage') }}">Storage</a>
-<a href="{{ url_for('status') }}">Status</a>
+<a href="{{ url_for('status') }}">Status</a><a href="{{ url_for('kanban') }}">Kanban</a>
 <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button>Logout</button></form></nav>
 {% endif %}
 <main>{% if error %}<div class="error">{{ error }}</div>{% endif %}{% block content %}{% endblock %}</main>

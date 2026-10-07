@@ -61,4 +61,10 @@ pveum acl modify / -user monitor-user@pve -role GuestAgentRead
 
 - **Dienste**: TCP-Connect-Check von der App zur IP des Gasts (Ports per `SERVICE_PORTS`, abschaltbar mit `SERVICE_CHECK=false`).
 
+### Kanbanboard
+
+Unter `/kanban` zeigt das passwortgeschützte Board vorhandene VMs und LXC-Container getrennt nach laufend/gestoppt. ToDos können angelegt, bearbeitet, gelöscht und per Drag & Drop zwischen „Geplant / ToDo“, „In Arbeit“ und „Erledigt“ verschoben werden; optional lassen sie sich einer VM bzw. einem Container zuordnen. Änderungen an ToDos erfordern die bestehende Anmeldung und den CSRF-Schutz. Ist Proxmox nicht erreichbar, bleiben ToDos und Host-Info weiterhin verfügbar.
+
+ToDos werden thread-sicher in einer JSON-Datei gespeichert. `KANBAN_TODOS_DB` legt den Speicherort fest (Standard: `data/kanban-todos.json`, unter `DATA_DIR`, falls gesetzt). `HOST_INFO_FILE` konfiguriert die optionale Host-Info-Datei (Standard: `/srv/info/host.info`); maximal 64 KiB werden gelesen und im Board als escaped, vorformatierter Text angezeigt. Eine fehlende oder nicht lesbare Datei wird ignoriert.
+
 Tests: `python -m pytest`

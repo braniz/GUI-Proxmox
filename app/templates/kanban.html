@@ -1,0 +1,51 @@
+{% extends "base.html" %}{% block content %}
+<h1>Kanbanboard</h1>
+{% if host_info %}<section class="card host-info"><h2>Host-Info</h2><pre>{{ host_info }}</pre></section>{% endif %}
+<section class="kanban-vms">
+<h2>Vorhandene VMs / Container</h2>
+{% if guests %}
+<div class="vm-columns">
+{% for state in ('running', 'stopped') %}
+<section class="kanban-column vm-column">
+<h3>{{ 'Laufend' if state == 'running' else 'Gestoppt' }}</h3>
+{% for guest in guests if guest.status == state or (state == 'stopped' and guest.status != 'running') %}
+<article class="kanban-card vm-card">
+<strong>{{ guest.name or 'Unbenannt' }}</strong>
+<span class="badge type">{{ 'VM' if guest.type == 'qemu' else 'LXC' }}</span>
+<span>VMID {{ guest.vmid }}</span><span class="badge {{ 'ok' if guest.status == 'running' else '' }}">{{ guest.status or 'unbekannt' }}</span>
+<small>Node: {{ guest.node }}{% if guest.cpu is defined %} · CPU {{ guest.cpu|pct }}{% endif %}{% if guest.mem is defined %} · RAM {{ guest.mem|gib }}{% endif %}</small>
+</article>
+{% else %}<p class="empty">Keine {{ 'laufenden' if state == 'running' else 'gestoppten' }} Gäste.</p>{% endfor %}
+</section>
+{% endfor %}
+</div>
+{% else %}<p class="empty">Keine Gäste verfügbar.</p>{% endif %}
+</section>
+
+<section class="todo-section">
+<div class="todo-heading"><h2>Geplante ToDos</h2><button id="add-todo" type="button">ToDo hinzufügen</button></div>
+<p id="todo-error" class="error" hidden></p>
+<div class="todo-columns">
+{% for status, label in [('planned', 'Geplant / ToDo'), ('in_progress', 'In Arbeit'), ('done', 'Erledigt')] %}
+<section class="kanban-column todo-column" data-status="{{ status }}">
+<h3>{{ label }}</h3><div class="todo-cards"></div>
+</section>
+{% endfor %}
+</div>
+</section>
+
+<dialog id="todo-dialog">
+<form id="todo-form">
+<h2 id="todo-dialog-title">ToDo hinzufügen</h2>
+<label for="todo-title">Titel</label><input id="todo-title" name="title" maxlength="200" required>
+<label for="todo-description">Beschreibung</label><textarea id="todo-description" name="description" maxlength="5000" rows="4"></textarea>
+<label for="todo-vmid">VM (optional)</label>
+<select id="todo-vmid" name="vmid"><option value="">Keine Zuordnung</option>
+{% for guest in guests %}<option value="{{ guest.vmid }}">{{ guest.name or 'Unbenannt' }} ({{ guest.vmid }})</option>{% endfor %}
+</select>
+<div class="dialog-actions"><button type="button" id="cancel-todo">Abbrechen</button><button type="submit">Speichern</button></div>
+</form>
+</dialog>
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<script src="{{ url_for('static', filename='kanban.js') }}" defer></script>
+{% endblock %}
