@@ -512,3 +512,55 @@ def test_bulk_requires_login_and_csrf(tmp_path):
     assert _by_id(c)[ids[0]]["status"] == "planned"
     anon = c.application.test_client()
     assert anon.post("/api/kanban/todos/bulk", json=body, headers=h).status_code == 302
+
+
+def _info_app(tmp_path, monkeypatch):
+    from app import proxmox
+    app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True, "COMMENTS_DB": str(tmp_path / "c.json"),
+                      "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
+    c = app.test_client()
+    P = proxmox.ProxmoxClient
+    monkeypatch.setattr("app.detect_services", lambda ip, ports: [])
+    monkeypatch.setattr(P, "nodes", lambda s: [{"node": "n1", "status": "online"}])
+    monkeypatch.setattr(P, "guests", lambda s: [
+        {"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": "running"},
+        {"node": "n1", "vmid": 101, "name": "ct", "type": "lxc", "status": "running"}])
+    monkeypatch.setattr(P, "qemu_interfaces", lambda s, n, v: {"result": [
+        {"name": "eth0", "ip-addresses": [{"ip-address": "10.0.0.5"}]}]})
+    monkeypatch.setattr(P, "lxc_interfaces", lambda s, n, v: [
+        {"name": "eth0", "inet": "10.0.0.6/24"}])
+    monkeypatch.setattr(P, "qemu_file_read", lambda s, n, v, p: {"content": "<b>" + p + "</b>"})
+    return c
+
+
+def test_hostname_is_bordered_clickable(tmp_path, monkeypatch):
+    c = _info_app(tmp_path, monkeypatch)
+    _login(c)
+    html = c.get("/guests").get_data(as_text=True)
+    assert 'class="hostname guest-hostname"' in html
+    assert 'data-info-url="/guests/100/info"' in html
+    assert "border:2px solid" in html
+
+
+def test_guest_info_requires_login(tmp_path, monkeypatch):
+    c = _info_app(tmp_path, monkeypatch)
+    assert c.get("/guests/100/info").status_code == 302
+
+
+def test_guest_info_qemu_and_lxc(tmp_path, monkeypatch):
+    c = _info_app(tmp_path, monkeypatch)
+    _login(c)
+    d = c.get("/guests/100/info").get_json()
+    assert d["type"] == "qemu" and d["ips"] == ["10.0.0.5"]
+    assert d["agent_info"] == "<b>/var/lib/prox-agent/info.json</b>"
+    assert d["host_info"] == "<b>/srv/info/host.info</b>"
+    d = c.get("/guests/101/info").get_json()
+    assert d["type"] == "lxc" and d["ips"] == ["10.0.0.6"]
+    assert d["agent_info"] is None and d["note"]
+    assert c.get("/guests/999/info").status_code == 404
+
+
+def test_guest_js_loads_info_on_click():
+    from pathlib import Path
+    js = Path("app/static/guests.js").read_text()
+    assert "guest-hostname" in js and "data-info-url" in js and "fetch(" in js

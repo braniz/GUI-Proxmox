@@ -11,8 +11,9 @@
 <span class="meta">CPU {{ n.info.cpu|pct }} · RAM {{ n.info.mem|gib }} / {{ n.info.maxmem|gib }} · {{ n.guests|length }} Gäste</span></summary>
 {% if n.guests %}<ul>
 {% for g in n.guests %}<li><div class="col col-base"><span class="badge type">{{ 'VM' if g.type=='qemu' else 'LXC' }}</span>
-<strong>{{ g.vmid }}</strong> {{ g.name }}
-<span class="badge {{ 'ok' if g.status == 'running' else '' }}">{{ g.status }}</span></div>
+<strong>{{ g.vmid }}</strong> <button type="button" class="hostname guest-hostname" data-info-url="{{ url_for('guest_info', vmid=g.vmid) }}" data-type="{{ g.type }}" title="Gast-Infos laden">{{ g.name }}</button>
+<span class="badge {{ 'ok' if g.status == 'running' else '' }}">{{ g.status }}</span>
+<div class="guest-info meta" hidden></div></div>
 <div class="col col-status"><span class="meta">CPU {{ g.cpu|pct }} · RAM {{ g.mem|gib }} / {{ g.maxmem|gib }}</span>
 {% if g.status == 'running' %}<span class="meta">IP: {{ g.ips|join(', ') if g.ips else 'unbekannt' }}</span>
 {% for s in g.services %}<span class="badge ok">{{ s }}</span>{% endfor %}
