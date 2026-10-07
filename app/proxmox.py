@@ -55,3 +55,16 @@ class ProxmoxClient:
         """Datei per Guest Agent lesen. Für LXC bietet die Proxmox-API keinen GET-Endpoint."""
         return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/file-read",
                          {"file": path}, timeout=3)
+
+    def _qemu_agent(self, node, vmid, command):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/{quote(command, safe='')}",
+                         timeout=3)
+
+    def qemu_hostname(self, node, vmid):
+        return self._qemu_agent(node, vmid, "get-host-name")
+
+    def qemu_fsinfo(self, node, vmid):
+        return self._qemu_agent(node, vmid, "get-fsinfo")
+
+    def qemu_status(self, node, vmid):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/status/current", timeout=3)

@@ -52,6 +52,7 @@ Voraussetzungen:
 
 - **QEMU**: QEMU Guest Agent muss auf der Gast-VM installiert und aktiviert sein, damit IPs, Host-Info und weitere Agent-Daten verfügbar sind. Ohne Agent wird die IP als „unbekannt“ angezeigt.
 - **LXC**: IPs über `/nodes/{node}/lxc/{vmid}/interfaces`. `host.info` wird für LXC nicht unterstützt, da die Proxmox-API keinen lesenden Endpoint dafür bietet (ggf. später per SSH).
+- **Gast-Detailseite**: Klick auf den Hostnamen öffnet `/guests/<vmid>` (Hostname, IPs, Filesystem, CPU-Last per QEMU Guest Agent; bei LXC nur Basisdaten). Der Agent muss in Proxmox unter „Options > QEMU Guest Agent“ aktiviert sein.
 - **Token-Rechte**: `PVEAuditor` allein reicht evtl. nicht für Agent-Abfragen. Zusätzlich eine Rolle mit `VM.GuestAgent.Audit` und `VM.GuestAgent.FileRead` (PVE 9) bzw. `VM.Monitor` (PVE 8) vergeben, z. B.:
 
 ```bash

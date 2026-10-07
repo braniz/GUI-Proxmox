@@ -286,3 +286,76 @@ class ServiceMonitorStore:
                 if os.path.exists(tmp):
                     os.unlink(tmp)
                 raise
+
+
+PSEUDO_FS = {"tmpfs", "devtmpfs", "squashfs", "overlay", "proc", "sysfs", "cgroup", "cgroup2",
+             "devpts", "efivarfs", "securityfs", "debugfs", "tracefs", "configfs", "fusectl", "mqueue"}
+
+
+def _result(data):
+    return data.get("result") if isinstance(data, dict) and "result" in data else data
+
+
+def extract_qemu_hostname(data):
+    data = _result(data)
+    name = data.get("host-name") if isinstance(data, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
+def extract_qemu_interfaces(data):
+    """Interfaces mit Name, MAC und IPs (ohne 'lo')."""
+    out = []
+    data = _result(data)
+    for iface in data if isinstance(data, list) else []:
+        if not isinstance(iface, dict) or iface.get("name") == "lo":
+            continue
+        ips = extract_qemu_ips([iface])
+        mac = iface.get("hardware-address")
+        out.append({"name": str(iface.get("name") or ""), "mac": mac if isinstance(mac, str) else None,
+                    "ips": ips})
+    return out
+
+
+def human_size(n):
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if n < 1024 or unit == "TiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
+def extract_fsinfo(data):
+    out = []
+    data = _result(data)
+    for fs in data if isinstance(data, list) else []:
+        if not isinstance(fs, dict):
+            continue
+        ftype = str(fs.get("type") or "")
+        if ftype.lower() in PSEUDO_FS:
+            continue
+        used, total = fs.get("used-bytes"), fs.get("total-bytes")
+        ok = (isinstance(used, int) and isinstance(total, int)
+              and not isinstance(used, bool) and not isinstance(total, bool) and total > 0)
+        out.append({"mount": str(fs.get("mountpoint") or fs.get("name") or ""), "type": ftype,
+                    "used": human_size(used) if ok else None,
+                    "total": human_size(total) if ok else None,
+                    "percent": round(used * 100 / total, 1) if ok else None})
+    return out
+
+
+def parse_loadavg(data):
+    """(1, 5, 15 Min) aus Inhalt von /proc/loadavg, sonst None."""
+    content = data.get("content") if isinstance(data, dict) else None
+    parts = content.split() if isinstance(content, str) else []
+    try:
+        return tuple(float(x) for x in parts[:3]) if len(parts) >= 3 else None
+    except ValueError:
+        return None
+
+
+def count_cpus(data):
+    content = data.get("content") if isinstance(data, dict) else None
+    if not isinstance(content, str):
+        return None
+    n = sum(1 for line in content.splitlines() if re.match(r"processor\s*:", line))
+    return n or None
