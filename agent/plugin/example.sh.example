@@ -1,0 +1,4 @@
+#!/bin/sh
+# Beispiel-Plugin (paketiert). Zum Aktivieren: Endung .example entfernen,
+# Besitzer root, ausfuehrbar (chmod 755).
+printf '{"example": "plugin", "load": "%s"}\n' "$(cut -d' ' -f1 /proc/loadavg)"

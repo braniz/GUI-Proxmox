@@ -1,0 +1,21 @@
+[Unit]
+Description=prox-agent - Systeminformationen fuer GUI-Proxmox
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/prox-agent --serve --config /etc/prox-agent/prox-agent.conf
+Restart=on-failure
+RestartSec=5
+StateDirectory=prox-agent
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+ReadWritePaths=/srv/info
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Beispiel fuer lokale Erweiterung. Zum Aktivieren: Endung .example entfernen,
+# Besitzer root, ausfuehrbar (chmod 755).
+printf '{"note": "lokale Erweiterung"}\n'
