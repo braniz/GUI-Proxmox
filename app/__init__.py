@@ -14,7 +14,8 @@ from werkzeug.security import check_password_hash
 
 from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
-                        extract_qemu_ips, parse_service_ports)
+                        extract_qemu_ips, parse_service_ports, parse_required_services,
+                        missing_services)
 from .kanban import TodoStore, read_host_info, validate_todo_fields
 from .proxmox import ProxmoxClient, ProxmoxError
 
@@ -86,6 +87,8 @@ def create_app(config=None):
         PVE_VERIFY_SSL=_verify_setting(os.environ.get("PVE_VERIFY_SSL")),
         SERVICE_CHECK=os.environ.get("SERVICE_CHECK", "true").lower() in ("true", "1", "yes"),
         SERVICE_PORTS=os.environ.get("SERVICE_PORTS", "22:ssh,80:http,443:https"),
+        AUTO_TODO_ENABLED=os.environ.get("AUTO_TODO_ENABLED", "false").lower() in ("true", "1", "yes"),
+        REQUIRED_SERVICES=os.environ.get("REQUIRED_SERVICES", ""),
         COMMENTS_DB=os.environ.get("COMMENTS_DB")
         or os.path.join(os.environ.get("DATA_DIR", "data"), "comments.json"),
         KANBAN_TODOS_DB=os.environ.get("KANBAN_TODOS_DB")
@@ -113,6 +116,30 @@ def create_app(config=None):
 
     def todos():
         return TodoStore(app.config["KANBAN_TODOS_DB"])
+
+    def create_service_todos(guests, ports):
+        """Legt für laufende Gäste mit nicht erreichbaren, benötigten Diensten je ein ToDo (Status planned) an."""
+        required = parse_required_services(app.config["REQUIRED_SERVICES"])
+        store = todos()
+        for g in guests:
+            if g.get("status") != "running" or not g.get("ips"):
+                continue
+            vmid = g.get("vmid")
+            for service in missing_services(vmid, required, ports, g.get("services", [])):
+                name = g.get("name") or vmid
+                todo = {
+                    "id": uuid4().hex,
+                    "title": f"Dienst {service} auf {name} ({vmid}) nicht erreichbar",
+                    "description": f"Der benötigte Dienst {service} ist auf {name} (VMID {vmid}, "
+                                   f"IP {g['ips'][0]}) gestoppt oder nicht erreichbar.",
+                    "status": "planned",
+                    "vmid": str(vmid),
+                    "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                }
+                try:
+                    store.create_unique(todo, f"service:{vmid}:{service}")
+                except OSError:
+                    pass
 
     update_cache = {}
 
@@ -291,8 +318,12 @@ def create_app(config=None):
         try:
             c = client()
             guests = c.guests()
+            auto = app.config["AUTO_TODO_ENABLED"] and app.config["SERVICE_CHECK"]
+            ports = parse_service_ports(app.config["SERVICE_PORTS"]) if auto else {}
             with ThreadPoolExecutor(max_workers=8) as pool:
-                guests = list(pool.map(lambda g: enrich_guest(c, g, {}, {}), guests))
+                guests = list(pool.map(lambda g: enrich_guest(c, g, ports, {}), guests))
+            if auto:
+                create_service_todos(guests, ports)
         except ProxmoxError as exc:
             error = str(exc)
         return render_template(

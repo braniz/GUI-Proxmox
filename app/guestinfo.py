@@ -72,6 +72,38 @@ def parse_service_ports(spec):
     return ports
 
 
+def parse_required_services(spec):
+    """'100:ssh,http;101:postgres;*:ssh' -> {'100': ['ssh', 'http'], ...}; '*' als VMID gilt für alle Gäste,
+    '*'/'all' als Dienst für alle in SERVICE_PORTS konfigurierten Dienste."""
+    required = {}
+    for part in (spec or "").split(";"):
+        vmid, sep, names = part.strip().partition(":")
+        vmid = vmid.strip()
+        if not sep or not (vmid == "*" or vmid.isdigit()):
+            continue
+        labels = [n.strip() for n in names.split(",") if n.strip()]
+        if labels:
+            required.setdefault(vmid, []).extend(labels)
+    return {k: _dedupe(v) for k, v in required.items()}
+
+
+def required_services_for(vmid, required, ports):
+    """Benötigte Dienst-Labels für einen Gast (globale '*'-Einträge plus VMID-spezifische)."""
+    labels = []
+    for name in required.get("*", []) + required.get(str(vmid), []):
+        if name.lower() in ("*", "all"):
+            labels.extend(label for _, label in ports)
+        else:
+            labels.append(name)
+    return _dedupe(labels)
+
+
+def missing_services(vmid, required, ports, detected):
+    """Benötigte Dienste, die nicht erkannt wurden. Dienste ohne Port in SERVICE_PORTS sind nicht prüfbar und werden ignoriert."""
+    checkable = {label for _, label in ports}
+    return [n for n in required_services_for(vmid, required, ports) if n in checkable and n not in detected]
+
+
 def check_port(ip, port, timeout=0.5):
     try:
         with socket.create_connection((ip, port), timeout=timeout):
