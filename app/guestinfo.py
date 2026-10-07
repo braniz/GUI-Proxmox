@@ -16,7 +16,7 @@ OS_RELEASE_PATH = "/etc/os-release"
 REBOOT_REQUIRED_PATH = "/var/run/reboot-required"
 UPDATES_AVAILABLE_PATH = "/var/lib/update-notifier/updates-available"
 DEBIAN_LIKE = {"debian", "ubuntu", "linuxmint", "raspbian", "pop"}
-DEFAULT_SERVICE_PORTS = "22:ssh,80:http,443:https"
+DEFAULT_SERVICE_PORTS = "22:ssh,80:http,443:https,21:ftp,25:smtp,53:dns,445:smb,3306:mysql,3389:rdp,5432:postgres"
 
 
 def _usable_ip(value):
@@ -85,36 +85,10 @@ def parse_service_ports(spec):
     return ports
 
 
-def parse_required_services(spec):
-    """'100:ssh,http;101:postgres;*:ssh' -> {'100': ['ssh', 'http'], ...}; '*' als VMID gilt für alle Gäste,
-    '*'/'all' als Dienst für alle in SERVICE_PORTS konfigurierten Dienste."""
-    required = {}
-    for part in (spec or "").split(";"):
-        vmid, sep, names = part.strip().partition(":")
-        vmid = vmid.strip()
-        if not sep or not (vmid == "*" or vmid.isdigit()):
-            continue
-        labels = [n.strip() for n in names.split(",") if n.strip()]
-        if labels:
-            required.setdefault(vmid, []).extend(labels)
-    return {k: _dedupe(v) for k, v in required.items()}
-
-
-def required_services_for(vmid, required, ports):
-    """Benötigte Dienst-Labels für einen Gast (globale '*'-Einträge plus VMID-spezifische)."""
-    labels = []
-    for name in required.get("*", []) + required.get(str(vmid), []):
-        if name.lower() in ("*", "all"):
-            labels.extend(label for _, label in ports)
-        else:
-            labels.append(name)
-    return _dedupe(labels)
-
-
-def missing_services(vmid, required, ports, detected):
-    """Benötigte Dienste, die nicht erkannt wurden. Dienste ohne Port in SERVICE_PORTS sind nicht prüfbar und werden ignoriert."""
+def missing_services(selected, ports, detected):
+    """Ausgewählte (extern überwachte) Dienste, die nicht erreichbar sind. Unbekannte Dienste werden ignoriert."""
     checkable = {label for _, label in ports}
-    return [n for n in required_services_for(vmid, required, ports) if n in checkable and n not in detected]
+    return [n for n in _dedupe(selected or []) if n in checkable and n not in detected]
 
 
 def check_port(ip, port, timeout=0.5):
@@ -257,6 +231,50 @@ class CommentStore:
                 data[str(vmid)] = text
             else:
                 data.pop(str(vmid), None)
+            directory = os.path.dirname(os.path.abspath(self.path))
+            os.makedirs(directory, exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=directory)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False)
+                os.replace(tmp, self.path)
+            except BaseException:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
+
+
+class ServiceMonitorStore:
+    """JSON-Datei: {vmid: [dienst, ...]} mit den extern zu überwachenden Diensten pro Gast."""
+
+    def __init__(self, path):
+        self.path = path
+        self._lock = threading.Lock()
+
+    def _read(self):
+        try:
+            with open(self.path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): [x for x in v if isinstance(x, str)]
+                for k, v in data.items() if isinstance(v, list)}
+
+    def all(self):
+        with self._lock:
+            return self._read()
+
+    def set_many(self, selections):
+        """Ersetzt die Auswahl der übergebenen VMIDs; leere Auswahl entfernt den Eintrag."""
+        with self._lock:
+            data = self._read()
+            for vmid, labels in selections.items():
+                if labels:
+                    data[str(vmid)] = _dedupe(labels)
+                else:
+                    data.pop(str(vmid), None)
             directory = os.path.dirname(os.path.abspath(self.path))
             os.makedirs(directory, exist_ok=True)
             fd, tmp = tempfile.mkstemp(dir=directory)
