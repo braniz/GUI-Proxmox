@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<h1>Nodes</h1>
+{% if nodes is defined %}
+<table><tr><th>Node</th><th>Status</th><th>CPU</th><th>RAM</th><th>Uptime (s)</th></tr>
+{% for n in nodes %}<tr><td>{{ n.node }}</td><td>{{ n.status }}</td><td>{{ n.cpu|pct }}</td>
+<td>{{ n.mem|gib }} / {{ n.maxmem|gib }}</td><td>{{ n.uptime or '-' }}</td></tr>{% endfor %}</table>
+{% endif %}{% endblock %}

@@ -1,0 +1,7 @@
+{% extends "base.html" %}{% block content %}
+<h1>Storage</h1>
+{% if storage is defined %}
+<table><tr><th>Storage</th><th>Node</th><th>Typ</th><th>Status</th><th>Belegt</th><th>Gesamt</th></tr>
+{% for s in storage %}<tr><td>{{ s.storage }}</td><td>{{ s.node }}</td><td>{{ s.plugintype }}</td><td>{{ s.status }}</td>
+<td>{{ s.disk|gib }}</td><td>{{ s.maxdisk|gib }}</td></tr>{% endfor %}</table>
+{% endif %}{% endblock %}

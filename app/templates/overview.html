@@ -1,0 +1,8 @@
+{% extends "base.html" %}{% block content %}
+<h1>Cluster-Übersicht</h1>
+{% if status is defined %}
+<table><tr><th>Typ</th><th>Name</th><th>Online</th><th>IP</th></tr>
+{% for s in status %}<tr><td>{{ s.type }}</td><td>{{ s.name }}</td><td>{{ 'ja' if s.online else ('-' if s.online is none else 'nein') }}</td><td>{{ s.ip or '-' }}</td></tr>{% endfor %}</table>
+{% endif %}
+{% if nodes is defined %}<p>Nodes: {{ nodes|length }}</p>{% endif %}
+{% endblock %}
