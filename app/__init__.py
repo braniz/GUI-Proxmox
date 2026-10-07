@@ -16,11 +16,12 @@ from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_com
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
                         extract_qemu_ips, extract_qemu_hostname, extract_qemu_interfaces,
                         extract_fsinfo, parse_loadavg, count_cpus, parse_service_ports, missing_services,
-                        ServiceMonitorStore, DEFAULT_SERVICE_PORTS)
+                        ServiceMonitorStore, DEFAULT_SERVICE_PORTS, parse_osinfo, parse_users, parse_time,
+                        parse_fsfreeze_status, parse_apt_update, mask_config)
 from .kanban import (
     BULK_ACTIONS, TodoStore, make_history_entry, read_host_info, validate_comment, validate_todo_fields,
 )
-from .proxmox import ProxmoxClient, ProxmoxError
+from .proxmox import ProxmoxClient, ProxmoxError, ProxmoxPermissionError
 
 UPDATE_CACHE_TTL = 300  # Sekunden
 AGENT_INFO_PATH = "/var/lib/prox-agent/info.json"
@@ -317,9 +318,24 @@ def create_app(config=None):
                 err["load"] = True
             d["cpus"] = attempt("cpus", lambda: count_cpus(c.qemu_file_read(node, vmid, "/proc/cpuinfo")))
             d["cpu_usage"] = attempt("cpu_usage", lambda: c.qemu_status(node, vmid).get("cpu"))
+            d["osinfo"] = attempt("osinfo", lambda: parse_osinfo(c.qemu_osinfo(node, vmid)))
+            d["users"] = attempt("users", lambda: parse_users(c.qemu_users(node, vmid)))
+            d["time"] = attempt("time", lambda: parse_time(c.qemu_time(node, vmid)))
+            d["freeze"] = attempt("freeze", lambda: parse_fsfreeze_status(c.qemu_fsfreeze_status(node, vmid)))
+            try:
+                d["apt"] = parse_apt_update(c.qemu_apt_update_exec(node, vmid))
+                if d["apt"] is None:
+                    err["apt"] = True
+            except ProxmoxPermissionError:
+                err["apt_perm"] = True
+            except (ProxmoxError, ValueError, TypeError, AttributeError):
+                err["apt"] = True
         elif running and kind == "lxc":
             d["interfaces"] = [{"name": "", "mac": None, "ips": ips} for ips in
                                [attempt("ips", lambda: extract_lxc_ips(c.lxc_interfaces(node, vmid)))] if ips]
+        if kind in ("qemu", "lxc"):
+            cfg_fn = c.qemu_config if kind == "qemu" else c.lxc_config
+            d["config"] = attempt("config", lambda: mask_config(cfg_fn(node, vmid)))
         return render_template("guest_detail.html", error=None, guest=g, d=d, err=err,
                                running=running, kind=kind)
 

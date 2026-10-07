@@ -62,7 +62,8 @@ def test_only_get_in_client():
     import inspect
     from app import proxmox
     src = inspect.getsource(proxmox)
-    assert not re.search(r"requests\.(post|put|delete|patch)", src)
+    assert not re.search(r"requests\.(put|delete|patch)", src)
+    assert len(re.findall(r"requests\.post", src)) == 1  # nur Guest-Agent-Exec (fester Befehl)
 
 
 def test_group_guests_by_node():
@@ -627,3 +628,124 @@ def test_guest_detail_lxc_and_stopped(tmp_path, monkeypatch):
     assert "10.0.0.6" in html and "nicht unterstützt" in html
     c = _detail_app(tmp_path, monkeypatch, status="stopped")
     assert "Gast läuft nicht." in c.get("/guests/100").get_data(as_text=True)
+
+
+def _full_app(tmp_path, monkeypatch):
+    from app import proxmox
+    c = _detail_app(tmp_path, monkeypatch)
+    P = proxmox.ProxmoxClient
+    monkeypatch.setattr(P, "qemu_osinfo", lambda s, n, v: {"result": {"pretty-name": "Debian <b>12</b>", "kernel-release": "6.1"}})
+    monkeypatch.setattr(P, "qemu_users", lambda s, n, v: {"result": [
+        {"user": "<script>root</script>", "login-time": 1700000000.5}]})
+    monkeypatch.setattr(P, "qemu_time", lambda s, n, v: 1700000000000000000)
+    monkeypatch.setattr(P, "qemu_fsfreeze_status", lambda s, n, v: "thawed")
+    monkeypatch.setattr(P, "qemu_apt_update_exec", lambda s, n, v: {
+        "exited": 1, "exitcode": 0, "out-data": "2024-05-01 10:11:12.123456789 +0200\n"})
+    monkeypatch.setattr(P, "qemu_config", lambda s, n, v: {
+        "name": "<i>web</i>", "memory": 2048, "cipassword": "s3cret", "sshkeys": "ssh-rsa%20AAA",
+        "Password": "hunter2"})
+    monkeypatch.setattr(P, "lxc_config", lambda s, n, v: {"hostname": "ct", "password": "pw123"})
+    return c
+
+
+def test_guest_detail_new_sections(tmp_path, monkeypatch):
+    c = _full_app(tmp_path, monkeypatch)
+    html = c.get("/guests/100").get_data(as_text=True)
+    for label in ("Betriebssystem", "Angemeldete Benutzer", "Gastzeit", "Dateisystem-Freeze",
+                  "Letztes apt-Update", "VM-Konfiguration (qm config)"):
+        assert label in html
+    assert "Debian &lt;b&gt;12&lt;/b&gt;" in html and "Debian <b>12</b>" not in html
+    assert "&lt;script&gt;root" in html and "<script>root" not in html
+    assert "14.11.2023 22:13:20" in html
+    assert "Nicht eingefroren" in html
+    assert "01.05.2024 10:11:12 (+0200)" in html
+    assert "&lt;i&gt;web&lt;/i&gt;" in html and "2048" in html
+    assert "s3cret" not in html and "ssh-rsa" not in html and "hunter2" not in html and "********" in html
+
+
+def test_guest_detail_new_sections_partial_failure(tmp_path, monkeypatch):
+    from app import proxmox
+    c = _full_app(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise proxmox.ProxmoxError("x")
+    for name in ("qemu_osinfo", "qemu_users", "qemu_config"):
+        monkeypatch.setattr(proxmox.ProxmoxClient, name, boom)
+    r = c.get("/guests/100")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Konfiguration nicht erreichbar" in html
+    assert "14.11.2023" in html and "01.05.2024" in html and "10.0.0.5" in html
+
+
+def test_guest_detail_exec_permission_denied(tmp_path, monkeypatch):
+    from app import proxmox
+    c = _full_app(tmp_path, monkeypatch)
+
+    def denied(*a, **k):
+        raise proxmox.ProxmoxPermissionError("403")
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_apt_update_exec", denied)
+    r = c.get("/guests/100")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and html.count("Keine Berechtigung für guest exec") == 1
+    assert "Debian" in html and "14.11.2023" in html
+
+
+def test_exec_command_is_fixed(monkeypatch):
+    from app import proxmox
+    calls = []
+
+    class R:
+        def __init__(self, data):
+            self.data = data
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"data": self.data}
+    monkeypatch.setattr(proxmox.requests, "post", lambda url, **k: calls.append((url, k)) or R({"pid": 7}))
+    monkeypatch.setattr(proxmox.requests, "get", lambda url, **k: R({"exited": 1, "exitcode": 0, "out-data": "x"}))
+    pc = proxmox.ProxmoxClient("h", 8006, "t", "s")
+    pc.qemu_apt_update_exec("n1", 100)
+    assert len(calls) == 1 and calls[0][0].endswith("/nodes/n1/qemu/100/agent/exec")
+    assert calls[0][1]["data"] == {"command": ["stat", "-c", "%y", "/var/lib/apt/lists/"]}
+    import inspect
+    assert list(inspect.signature(pc.qemu_apt_update_exec).parameters) == ["node", "vmid", "wait"]
+
+
+def test_exec_permission_http_error(monkeypatch):
+    from app import proxmox
+    import requests as rq
+
+    class R:
+        status_code = 403
+
+        def raise_for_status(self):
+            raise rq.HTTPError(response=self)
+    monkeypatch.setattr(proxmox.requests, "post", lambda url, **k: R())
+    with pytest.raises(proxmox.ProxmoxPermissionError):
+        proxmox.ProxmoxClient("h", 8006, "t", "s").qemu_apt_update_exec("n1", 100)
+
+
+def test_exec_ignores_request_input(tmp_path, monkeypatch):
+    from app import proxmox
+    c = _full_app(tmp_path, monkeypatch)
+    seen = []
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_apt_update_exec",
+                        lambda s, n, v: seen.append((n, v)) or {"exited": 1, "exitcode": 0, "out-data": "x"})
+    c.get("/guests/100?command=rm+-rf+/&cmd=id", headers={"X-Command": "id"})
+    assert seen == [("n1", 100)]
+
+
+def test_guest_detail_lxc_and_stopped_config(tmp_path, monkeypatch):
+    c = _full_app(tmp_path, monkeypatch)
+    html = c.get("/guests/101").get_data(as_text=True)
+    assert "VM-Konfiguration (qm config)" in html and "nicht unterstützt" in html
+    assert "pw123" not in html and "Betriebssystem" not in html and "Letztes apt-Update" not in html
+    c = _full_app(tmp_path, monkeypatch)
+    from app import proxmox
+    monkeypatch.setattr(proxmox.ProxmoxClient, "guests", lambda s: [
+        {"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": "stopped"}])
+    html = c.get("/guests/100").get_data(as_text=True)
+    assert "Gast läuft nicht." in html and "VM-Konfiguration (qm config)" in html
+    assert "Betriebssystem" not in html and "s3cret" not in html

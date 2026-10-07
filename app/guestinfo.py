@@ -1,7 +1,7 @@
 """Hilfsfunktionen für Gast-Details: IP-Extraktion, Port-Check, Kommentar-Speicher, host.info."""
 import ipaddress
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import re
 import socket
@@ -359,3 +359,88 @@ def count_cpus(data):
         return None
     n = sum(1 for line in content.splitlines() if re.match(r"processor\s*:", line))
     return n or None
+
+
+SENSITIVE_CONFIG_KEYS = ("password", "cipassword", "sshkeys")
+
+
+def format_epoch(value, nanoseconds=False):
+    """Epoch (Sekunden, optional Nanosekunden) als 'TT.MM.JJJJ HH:MM:SS' (UTC); None wenn ungültig."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        secs = value / 1e9 if nanoseconds else value
+        return datetime.fromtimestamp(secs, timezone.utc).strftime("%d.%m.%Y %H:%M:%S UTC")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def parse_osinfo(data):
+    """Liste (Label, Wert) aus get-osinfo; leer wenn nichts Brauchbares."""
+    data = _result(data)
+    if not isinstance(data, dict):
+        return []
+    labels = (("pretty-name", "Name"), ("version", "Version"), ("kernel-release", "Kernel"),
+              ("kernel-version", "Kernel-Version"), ("machine", "Architektur"), ("id", "ID"))
+    return [(label, str(data[k])) for k, label in labels if data.get(k) not in (None, "")]
+
+
+def parse_users(data):
+    out = []
+    data = _result(data)
+    for u in data if isinstance(data, list) else []:
+        if not isinstance(u, dict) or not u.get("user"):
+            continue
+        domain = u.get("domain")
+        out.append({"user": str(u["user"]), "domain": str(domain) if domain else None,
+                    "login": format_epoch(u.get("login-time"))})
+    return out
+
+
+def parse_time(data):
+    """get-time liefert Nanosekunden seit Epoch."""
+    return format_epoch(_result(data), nanoseconds=True)
+
+
+def parse_fsfreeze_status(data):
+    data = _result(data)
+    return {"thawed": "Nicht eingefroren (thawed)", "frozen": "Eingefroren (frozen)"}.get(
+        data.strip().lower() if isinstance(data, str) else None)
+
+
+def decode_exec_result(data):
+    """(exitcode, stdout, stderr) aus exec-status; Text kommt bereits dekodiert von Proxmox."""
+    if not isinstance(data, dict):
+        return None, "", ""
+    code = data.get("exitcode")
+    return (code if isinstance(code, int) and not isinstance(code, bool) else None,
+            str(data.get("out-data") or ""), str(data.get("err-data") or ""))
+
+
+def format_stat_time(text):
+    """'2024-05-01 10:11:12.123456789 +0200' -> '01.05.2024 10:11:12 (+0200)'; sonst Originaltext."""
+    text = (text or "").strip()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2}:\d{2})(?:\.\d+)?(?: ([+-]\d{4}))?$", text)
+    if not m:
+        return text
+    y, mo, d, t, tz = m.groups()
+    return f"{d}.{mo}.{y} {t}" + (f" ({tz})" if tz else "")
+
+
+def parse_apt_update(data):
+    """Formatierter Zeitstempel aus exec-status von 'stat -c %y'; None bei Fehler/leerer Ausgabe."""
+    code, out, _ = decode_exec_result(data)
+    if code != 0 or not out.strip():
+        return None
+    return format_stat_time(out.splitlines()[0])
+
+
+def mask_config(config):
+    """Sortierte (Schlüssel, Wert)-Zeilen; Werte sensibler Schlüssel werden maskiert."""
+    if not isinstance(config, dict):
+        return []
+    rows = []
+    for key in sorted(config, key=str):
+        sensitive = any(s in str(key).lower() for s in SENSITIVE_CONFIG_KEYS)
+        rows.append((str(key), "********" if sensitive else str(config[key])))
+    return rows
