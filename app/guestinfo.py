@@ -1,7 +1,9 @@
 """Hilfsfunktionen für Gast-Details: IP-Extraktion, Port-Check, Kommentar-Speicher, host.info."""
+import base64
+import binascii
 import ipaddress
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 import re
 import socket
@@ -359,3 +361,84 @@ def count_cpus(data):
         return None
     n = sum(1 for line in content.splitlines() if re.match(r"processor\s*:", line))
     return n or None
+
+
+OSINFO_FIELDS = (("name", "Name"), ("pretty-name", "Bezeichnung"), ("version", "Version"),
+                 ("kernel-release", "Kernel-Release"), ("kernel-version", "Kernel-Version"),
+                 ("machine", "Architektur"), ("id", "ID"))
+SENSITIVE_CONFIG = re.compile(r"password|passwd|sshkeys|secret|token", re.I)
+_STAT_TS = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
+
+
+def extract_osinfo(data):
+    data = _result(data)
+    if not isinstance(data, dict):
+        return None
+    out = [(label, str(data[key])) for key, label in OSINFO_FIELDS if data.get(key) not in (None, "")]
+    return out or None
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def format_epoch(seconds):
+    return datetime.fromtimestamp(seconds, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def extract_users(data):
+    out = []
+    data = _result(data)
+    for u in data if isinstance(data, list) else []:
+        if not isinstance(u, dict):
+            continue
+        login = u.get("login-time")
+        try:
+            when = format_epoch(login) if _num(login) else None
+        except (OverflowError, OSError, ValueError):
+            when = None
+        name = str(u.get("user") or "")
+        if u.get("domain"):
+            name = f"{u['domain']}\\{name}"
+        out.append({"user": name, "login": when})
+    return out
+
+
+def parse_guest_time(data, now=None):
+    """Gastzeit (ns seit Epoch) -> {'utc','local','diff'}; diff = Gast minus Server in Sekunden."""
+    ns = _result(data)
+    if not _num(ns):
+        return None
+    secs = ns / 1e9
+    now = now if now is not None else datetime.now(timezone.utc)
+    return {"utc": format_epoch(secs),
+            "local": datetime.fromtimestamp(secs, timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z"),
+            "diff": round(secs - now.timestamp(), 1)}
+
+
+def parse_fsfreeze_status(data):
+    data = _result(data)
+    return data if data in ("thawed", "frozen") else None
+
+
+def mask_config(cfg):
+    """Sortierte (Schlüssel, Wert)-Liste; sensible Werte werden maskiert."""
+    if not isinstance(cfg, dict):
+        return None
+    return [(str(k), "***" if SENSITIVE_CONFIG.search(str(k)) else str(v)) for k, v in sorted(cfg.items())]
+
+
+def parse_apt_timestamp(data):
+    """Zeitstempel aus exec-status von `stat -c %y` ('out-data' im Klartext oder base64); None wenn unklar."""
+    if not isinstance(data, dict) or data.get("exitcode") not in (0, None):
+        return None
+    out = data.get("out-data")
+    if not isinstance(out, str):
+        return None
+    out = out.strip()
+    if not _STAT_TS.match(out):
+        try:
+            out = base64.b64decode(out, validate=True).decode("utf-8", "replace").strip()
+        except (binascii.Error, ValueError):
+            return None
+    return out[:40] if _STAT_TS.match(out) else None

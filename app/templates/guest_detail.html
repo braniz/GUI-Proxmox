@@ -25,7 +25,36 @@
 {% if d.load %}<p>Load Average (1/5/15 min): {{ d.load[0] }} / {{ d.load[1] }} / {{ d.load[2] }}</p>
 {% else %}<p class="meta">Load Average nicht verfügbar{% if err.load %} ({{ hint }}){% endif %}.</p>{% endif %}
 <p class="meta">CPUs: {{ d.cpus if d.cpus else 'nicht verfügbar' }} · Aktuelle CPU-Auslastung: {{ d.cpu_usage|pct if d.cpu_usage is not none else 'nicht verfügbar' }}</p>
+<h2>Betriebssystem</h2>
+{% if err.osinfo %}<p class="meta">{{ hint }}</p>
+{% elif d.osinfo %}<table>{% for k, v in d.osinfo %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table>
+{% else %}<p class="meta">nicht verfügbar</p>{% endif %}
+<h2>Angemeldete Benutzer</h2>
+{% if err.users %}<p class="meta">{{ hint }}</p>
+{% elif d.users %}<table><tr><th>Benutzer</th><th>Anmeldezeit</th></tr>
+{% for u in d.users %}<tr><td>{{ u.user }}</td><td>{{ u.login or 'n/a' }}</td></tr>{% endfor %}</table>
+{% else %}<p class="meta">Keine angemeldeten Benutzer.</p>{% endif %}
+<h2>Gastzeit</h2>
+{% if err.time %}<p class="meta">{{ hint }}</p>
+{% elif d.time %}<p>{{ d.time.utc }} (lokal: {{ d.time.local }})</p>
+<p class="meta">Differenz zum GUI-Server: {{ d.time.diff }} s</p>
+{% else %}<p class="meta">nicht verfügbar</p>{% endif %}
+<h2>Dateisystem-Freeze</h2>
+{% if err.freeze %}<p class="meta">{{ hint }}</p>
+{% elif d.freeze %}<p>{{ d.freeze }}</p>
+{% else %}<p class="meta">nicht verfügbar</p>{% endif %}
+<h2>Letztes apt-Update</h2>
+{% if err.apt_denied %}<p class="meta">Keine Berechtigung für guest exec</p>
+{% elif err.apt %}<p class="meta">{{ hint }}</p>
+{% elif d.apt %}<p>{{ d.apt }}</p>
+{% else %}<p class="meta">nicht verfügbar</p>{% endif %}
 {% else %}
 <h2>Filesystem / CPU-Last</h2><p class="meta">Über den Guest Agent bei LXC nicht unterstützt.</p>
 {% endif %}
-{% endif %}{% endif %}{% endblock %}
+{% endif %}
+<h2>VM-Konfiguration (qm config)</h2>
+{% if err.config %}<p class="meta">nicht verfügbar</p>
+{% elif d.config %}<table><tr><th>Schlüssel</th><th>Wert</th></tr>
+{% for k, v in d.config %}<tr><td>{{ k }}</td><td>{{ v }}</td></tr>{% endfor %}</table>
+{% else %}<p class="meta">nicht verfügbar</p>{% endif %}
+{% endif %}{% endblock %}

@@ -16,15 +16,19 @@ from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_com
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
                         extract_qemu_ips, extract_qemu_hostname, extract_qemu_interfaces,
                         extract_fsinfo, parse_loadavg, count_cpus, parse_service_ports, missing_services,
-                        ServiceMonitorStore, DEFAULT_SERVICE_PORTS)
+                        ServiceMonitorStore, DEFAULT_SERVICE_PORTS, extract_osinfo, extract_users,
+                        parse_guest_time, parse_fsfreeze_status, mask_config, parse_apt_timestamp)
 from .kanban import (
     BULK_ACTIONS, TodoStore, make_history_entry, read_host_info, validate_comment, validate_todo_fields,
 )
-from .proxmox import ProxmoxClient, ProxmoxError
+from .proxmox import ProxmoxClient, ProxmoxError, ProxmoxPermissionError
 
 UPDATE_CACHE_TTL = 300  # Sekunden
 AGENT_INFO_PATH = "/var/lib/prox-agent/info.json"
 AGENT_INFO_LIMIT = 32 * 1024
+APT_CACHE_TTL = 60  # Sekunden
+EXEC_POLLS = 5
+EXEC_POLL_INTERVAL = 0.3
 
 # Hash zum Angleichen der Laufzeit bei unbekanntem Benutzer
 _DUMMY_HASH = "scrypt:32768:8:1$dummy$" + "0" * 128
@@ -282,6 +286,27 @@ def create_app(config=None):
             return group_guests_by_node(c.nodes(), gs)
         return page("guests.html", tree=tree, max_comment=lambda: MAX_COMMENT_LEN)
 
+    apt_cache = {}
+
+    def apt_update_time(c, node, vmid):
+        """Fester Befehl (keine Nutzereingaben); Ergebnis kurz gecacht. Wirft ProxmoxError."""
+        key = (node, vmid)
+        hit = apt_cache.get(key)
+        if hit and time.monotonic() - hit[0] < APT_CACHE_TTL:
+            return hit[1]
+        pid = (c.qemu_exec_apt_lists_stat(node, vmid) or {}).get("pid")
+        value = None
+        for _ in range(EXEC_POLLS):
+            st = c.qemu_exec_status(node, vmid, pid)
+            if isinstance(st, dict) and st.get("exited"):
+                value = parse_apt_timestamp(st)
+                break
+            time.sleep(EXEC_POLL_INTERVAL)
+        else:
+            raise ProxmoxError("exec Zeitüberschreitung")
+        apt_cache[key] = (time.monotonic(), value)
+        return value
+
     @app.route("/guests/<int:vmid>")
     @login_required
     def guest_detail(vmid):
@@ -293,13 +318,18 @@ def create_app(config=None):
         if g is None:
             abort(404)
         node, kind = g.get("node"), g.get("type")
-        d = {"hostname": None, "interfaces": [], "fs": None, "load": None, "cpus": None, "cpu_usage": None}
+        d = {"hostname": None, "interfaces": [], "fs": None, "load": None, "cpus": None, "cpu_usage": None,
+             "osinfo": None, "users": None, "time": None, "freeze": None, "apt": None, "config": None}
         err = {}
 
         def attempt(key, fn):
             try:
                 return fn()
-            except (ProxmoxError, ValueError, TypeError, AttributeError):
+            except ProxmoxPermissionError:
+                err[key] = True
+                err[key + "_denied"] = True
+                return None
+            except (ProxmoxError, ValueError, TypeError, AttributeError, OverflowError, OSError):
                 err[key] = True
                 return None
 
@@ -317,9 +347,17 @@ def create_app(config=None):
                 err["load"] = True
             d["cpus"] = attempt("cpus", lambda: count_cpus(c.qemu_file_read(node, vmid, "/proc/cpuinfo")))
             d["cpu_usage"] = attempt("cpu_usage", lambda: c.qemu_status(node, vmid).get("cpu"))
+            d["osinfo"] = attempt("osinfo", lambda: extract_osinfo(c.qemu_osinfo(node, vmid)))
+            d["users"] = attempt("users", lambda: extract_users(c.qemu_users(node, vmid)))
+            d["time"] = attempt("time", lambda: parse_guest_time(c.qemu_time(node, vmid)))
+            d["freeze"] = attempt("freeze", lambda: parse_fsfreeze_status(c.qemu_fsfreeze_status(node, vmid)))
+            d["apt"] = attempt("apt", lambda: apt_update_time(c, node, vmid))
         elif running and kind == "lxc":
             d["interfaces"] = [{"name": "", "mac": None, "ips": ips} for ips in
                                [attempt("ips", lambda: extract_lxc_ips(c.lxc_interfaces(node, vmid)))] if ips]
+        if kind in ("qemu", "lxc"):
+            cfg_fn = c.qemu_config if kind == "qemu" else c.lxc_config
+            d["config"] = attempt("config", lambda: mask_config(cfg_fn(node, vmid)))
         return render_template("guest_detail.html", error=None, guest=g, d=d, err=err,
                                running=running, kind=kind)
 

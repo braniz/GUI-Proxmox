@@ -1,4 +1,4 @@
-"""Read-only Proxmox-Client: ausschließlich GET-Anfragen."""
+"""Proxmox-Client: GET-Anfragen; POST nur für fsfreeze-status (nur lesend) und den fest verdrahteten guest exec."""
 from urllib.parse import quote
 
 import requests
@@ -6,6 +6,13 @@ import requests
 
 class ProxmoxError(Exception):
     pass
+
+
+class ProxmoxPermissionError(ProxmoxError):
+    """HTTP 401/403 von Proxmox (fehlende Rechte)."""
+
+
+EXEC_APT_LISTS_CMD = ["stat", "-c", "%y", "/var/lib/apt/lists/"]
 
 
 class ProxmoxClient:
@@ -22,7 +29,23 @@ class ProxmoxClient:
             r.raise_for_status()
             return r.json().get("data") or []
         except (requests.RequestException, ValueError) as exc:
-            raise ProxmoxError(f"Proxmox-Abfrage fehlgeschlagen: {path} ({type(exc).__name__})") from exc
+            raise self._map_error(path, exc) from exc
+
+    @staticmethod
+    def _map_error(path, exc):
+        resp = getattr(exc, "response", None)
+        cls = ProxmoxPermissionError if resp is not None and resp.status_code in (401, 403) else ProxmoxError
+        return cls(f"Proxmox-Abfrage fehlgeschlagen: {path} ({type(exc).__name__})")
+
+    def _post(self, path, data=None, timeout=None):
+        """Nur für fsfreeze-status und den fest verdrahteten exec-Aufruf."""
+        try:
+            r = requests.post(self.base + path, headers=self.headers, data=data,
+                              verify=self.verify, timeout=timeout or self.timeout)
+            r.raise_for_status()
+            return r.json().get("data") or []
+        except (requests.RequestException, ValueError) as exc:
+            raise self._map_error(path, exc) from exc
 
     def cluster_status(self):
         return self._get("/cluster/status")
@@ -68,3 +91,32 @@ class ProxmoxClient:
 
     def qemu_status(self, node, vmid):
         return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/status/current", timeout=3)
+
+    def qemu_osinfo(self, node, vmid):
+        return self._qemu_agent(node, vmid, "get-osinfo")
+
+    def qemu_users(self, node, vmid):
+        return self._qemu_agent(node, vmid, "get-users")
+
+    def qemu_time(self, node, vmid):
+        return self._qemu_agent(node, vmid, "get-time")
+
+    def qemu_fsfreeze_status(self, node, vmid):
+        """Nur Statusabfrage (Proxmox verlangt POST); freeze/thaw werden nie aufgerufen."""
+        return self._post(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/fsfreeze-status",
+                          timeout=3)
+
+    def qemu_config(self, node, vmid):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/config", timeout=3)
+
+    def lxc_config(self, node, vmid):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/lxc/{int(vmid)}/config", timeout=3)
+
+    def qemu_exec_apt_lists_stat(self, node, vmid):
+        """Startet den fest verdrahteten Befehl `stat -c %y /var/lib/apt/lists/`; liefert {'pid': ...}."""
+        return self._post(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/exec",
+                          data=[("command", part) for part in EXEC_APT_LISTS_CMD], timeout=3)
+
+    def qemu_exec_status(self, node, vmid, pid):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/exec-status",
+                         {"pid": int(pid)}, timeout=3)

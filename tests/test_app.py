@@ -62,7 +62,9 @@ def test_only_get_in_client():
     import inspect
     from app import proxmox
     src = inspect.getsource(proxmox)
-    assert not re.search(r"requests\.(post|put|delete|patch)", src)
+    assert not re.search(r"requests\.(put|delete|patch)", src)
+    assert len(re.findall(r"requests\.post", src)) == 1
+    assert not re.search(r"fsfreeze-(freeze|thaw)\b|freeze-thaw", src)
 
 
 def test_group_guests_by_node():
@@ -583,6 +585,21 @@ def _detail_app(tmp_path, monkeypatch, status="running"):
     monkeypatch.setattr(P, "qemu_file_read", lambda s, n, v, p: {
         "content": "0.10 0.20 0.30 1/100 5\n" if "loadavg" in p else "processor\t: 0\nprocessor\t: 1\n"})
     monkeypatch.setattr(P, "qemu_status", lambda s, n, v: {"cpu": 0.25})
+    monkeypatch.setattr(P, "qemu_osinfo", lambda s, n, v: {"result": {
+        "name": "Debian <b>GNU</b>", "pretty-name": "Debian 12", "version": "12", "id": "debian",
+        "kernel-release": "6.1.0", "kernel-version": "#1 SMP", "machine": "x86_64"}})
+    monkeypatch.setattr(P, "qemu_users", lambda s, n, v: {"result": [
+        {"user": "<u>root</u>", "login-time": 1700000000.5}]})
+    monkeypatch.setattr(P, "qemu_time", lambda s, n, v: {"result": 1700000000 * 10**9})
+    monkeypatch.setattr(P, "qemu_fsfreeze_status", lambda s, n, v: "thawed")
+    monkeypatch.setattr(P, "qemu_config", lambda s, n, v: {
+        "cores": 2, "memory": 2048, "cipassword": "hunter2", "sshkeys": "ssh-rsa AAA", "net0": "virtio=<x>"})
+    monkeypatch.setattr(P, "lxc_config", lambda s, n, v: {"hostname": "ct", "password": "pw123"})
+    calls = []
+    monkeypatch.setattr(P, "qemu_exec_apt_lists_stat", lambda s, n, v: calls.append((n, v)) or {"pid": 7})
+    monkeypatch.setattr(P, "qemu_exec_status", lambda s, n, v, pid: {
+        "exited": 1, "exitcode": 0, "out-data": "2024-05-01 10:11:12.123456789 +0200\n"})
+    c.exec_calls = calls
     _login(c)
     return c
 
@@ -627,3 +644,90 @@ def test_guest_detail_lxc_and_stopped(tmp_path, monkeypatch):
     assert "10.0.0.6" in html and "nicht unterstützt" in html
     c = _detail_app(tmp_path, monkeypatch, status="stopped")
     assert "Gast läuft nicht." in c.get("/guests/100").get_data(as_text=True)
+
+
+def test_guest_detail_new_sections(tmp_path, monkeypatch):
+    c = _detail_app(tmp_path, monkeypatch)
+    html = c.get("/guests/100").get_data(as_text=True)
+    for h in ("Betriebssystem", "Angemeldete Benutzer", "Gastzeit", "Dateisystem-Freeze",
+              "Letztes apt-Update", "VM-Konfiguration (qm config)"):
+        assert h in html
+    assert "Debian 12" in html and "x86_64" in html and "6.1.0" in html
+    assert "&lt;b&gt;GNU&lt;/b&gt;" in html and "<b>GNU</b>" not in html
+    assert "&lt;u&gt;root&lt;/u&gt;" in html and "2023-11-14 22:13:20 UTC" in html
+    assert "thawed" in html and "2024-05-01 10:11:12" in html
+    assert "cores" in html and "virtio=&lt;x&gt;" in html
+    assert "hunter2" not in html and "ssh-rsa" not in html and "***" in html
+
+
+def test_guest_detail_new_calls_fail_individually(tmp_path, monkeypatch):
+    from app import proxmox
+    P = proxmox.ProxmoxClient
+
+    def boom(*a, **k):
+        raise proxmox.ProxmoxError("x")
+    for name in ("qemu_osinfo", "qemu_users", "qemu_time", "qemu_fsfreeze_status", "qemu_exec_apt_lists_stat",
+                 "qemu_config"):
+        c = _detail_app(tmp_path, monkeypatch)
+        monkeypatch.setattr(P, name, boom)
+        r = c.get("/guests/100")
+        html = r.get_data(as_text=True)
+        assert r.status_code == 200 and "10.0.0.5" in html
+        assert "Debian 12" in html or name == "qemu_osinfo"
+        assert "thawed" in html or name == "qemu_fsfreeze_status"
+        assert "cores" in html or name == "qemu_config"
+        assert "22:13:20" in html or name == "qemu_time"
+
+
+def test_guest_detail_exec_permission_denied(tmp_path, monkeypatch):
+    from app import proxmox
+    c = _detail_app(tmp_path, monkeypatch)
+
+    def denied(*a, **k):
+        raise proxmox.ProxmoxPermissionError("403")
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_exec_apt_lists_stat", denied)
+    r = c.get("/guests/100")
+    html = r.get_data(as_text=True)
+    assert r.status_code == 200 and "Keine Berechtigung für guest exec" in html
+    assert "Debian 12" in html and "thawed" in html
+
+
+def test_guest_detail_exec_command_fixed(monkeypatch):
+    from app import proxmox
+    sent = []
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self): return {"data": {"pid": 1}}
+    monkeypatch.setattr(proxmox.requests, "post", lambda url, **k: sent.append((url, k)) or R())
+    pc = proxmox.ProxmoxClient("h", 8006, "t", "s")
+    pc.qemu_exec_apt_lists_stat("n1", 100)
+    url, kw = sent[0]
+    assert url.endswith("/nodes/n1/qemu/100/agent/exec")
+    assert kw["data"] == [("command", "stat"), ("command", "-c"), ("command", "%y"),
+                          ("command", "/var/lib/apt/lists/")]
+
+
+def test_guest_detail_exec_ignores_request_input(tmp_path, monkeypatch):
+    c = _detail_app(tmp_path, monkeypatch)
+    c.get("/guests/100?command=rm&cmd=x&pid=9")
+    assert c.exec_calls == [("n1", 100)]
+
+
+def test_guest_detail_exec_not_called_for_lxc_or_stopped(tmp_path, monkeypatch):
+    c = _detail_app(tmp_path, monkeypatch)
+    html = c.get("/guests/101").get_data(as_text=True)
+    assert c.exec_calls == [] and "Letztes apt-Update" not in html
+    assert "hostname" in html and "pw123" not in html and "***" in html
+    c = _detail_app(tmp_path, monkeypatch, status="stopped")
+    html = c.get("/guests/100").get_data(as_text=True)
+    assert c.exec_calls == [] and "Gast läuft nicht." in html and "cores" in html
+
+
+def test_apt_timestamp_parsing():
+    import base64
+    from app.guestinfo import parse_apt_timestamp
+    assert parse_apt_timestamp({"exitcode": 1, "out-data": "x"}) is None
+    b64 = base64.b64encode(b"2024-05-01 10:11:12.5 +0000\n").decode()
+    assert parse_apt_timestamp({"exitcode": 0, "out-data": b64}).startswith("2024-05-01 10:11:12")
+    assert parse_apt_timestamp({"exitcode": 0, "out-data": "garbage"}) is None
