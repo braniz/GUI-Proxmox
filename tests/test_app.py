@@ -54,3 +54,22 @@ def test_only_get_in_client():
     from app import proxmox
     src = inspect.getsource(proxmox)
     assert not re.search(r"requests\.(post|put|delete|patch)", src)
+
+
+def test_group_guests_by_node():
+    from app import group_guests_by_node
+    tree = group_guests_by_node([{"node": "a"}, {"node": "b"}],
+                                [{"node": "a", "vmid": 2}, {"node": "a", "vmid": 1}, {"node": "c", "vmid": 3}])
+    assert [t["name"] for t in tree] == ["a", "b", "c"]
+    assert [g["vmid"] for g in tree[0]["guests"]] == [1, 2]
+    assert tree[1]["guests"] == []
+
+
+def test_guests_tree_page(client, monkeypatch):
+    from app import proxmox
+    monkeypatch.setattr(proxmox.ProxmoxClient, "nodes", lambda s: [{"node": "n1", "status": "online"}])
+    monkeypatch.setattr(proxmox.ProxmoxClient, "guests",
+                        lambda s: [{"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": "running"}])
+    client.post("/login", data={"username": "admin", "password": "pw", "csrf": token(client)})
+    html = client.get("/guests").get_data(as_text=True)
+    assert "n1" in html and "web" in html and "<details" in html

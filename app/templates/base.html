@@ -14,6 +14,16 @@ th{background:#e9ecef}
 .error,.flash{background:#fde2e2;padding:.6rem;border-radius:4px;margin-bottom:1rem}
 .login{max-width:320px;margin:4rem auto;background:#fff;padding:1.5rem;border-radius:6px}
 .login input{width:100%;box-sizing:border-box;margin:.3rem 0 .8rem;padding:.4rem}
+.tree{list-style:none;padding:0;margin:0}
+.tree details{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12);margin-bottom:1rem}
+.tree summary{cursor:pointer;padding:.7rem 1rem;font-weight:600;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
+.tree .meta{font-weight:400;color:#555;font-size:.9rem}
+.tree ul{list-style:none;margin:0 0 .5rem 1.6rem;padding:0 1rem .3rem 1rem;border-left:2px solid #c5cae9}
+.tree li{position:relative;padding:.35rem .6rem;display:flex;gap:.7rem;flex-wrap:wrap;align-items:center}
+.tree li::before{content:"";position:absolute;left:-1rem;top:50%;width:.8rem;border-top:2px solid #c5cae9}
+.badge{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.8rem;color:#fff;background:#868e96}
+.badge.ok{background:#2f9e44}.badge.bad{background:#e03131}.badge.type{background:#4263eb}
+@media(max-width:600px){main{padding:.6rem}.tree ul{margin-left:.5rem}}
 </style></head><body>
 {% if session.user %}
 <nav><a href="{{ url_for('overview') }}">Übersicht</a><a href="{{ url_for('nodes') }}">Nodes</a>

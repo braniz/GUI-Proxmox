@@ -23,6 +23,20 @@ def _verify_setting(value):
     return v  # CA-Pfad
 
 
+def group_guests_by_node(nodes, guests):
+    """Gruppiert Gäste pro Node (Baum: Node -> VMs/LXC), sortiert nach VMID."""
+    tree = {}
+    for n in nodes or []:
+        tree[n.get("node")] = {"info": n, "guests": []}
+    for g in guests or []:
+        name = g.get("node")
+        tree.setdefault(name, {"info": {"node": name, "status": "unknown"}, "guests": []})
+        tree[name]["guests"].append(g)
+    for entry in tree.values():
+        entry["guests"].sort(key=lambda g: g.get("vmid") or 0)
+    return [dict(name=k, **v) for k, v in sorted(tree.items(), key=lambda kv: str(kv[0]))]
+
+
 def create_app(config=None):
     load_dotenv()
     app = Flask(__name__)
@@ -133,7 +147,10 @@ def create_app(config=None):
     @app.route("/guests")
     @login_required
     def guests():
-        return page("guests.html", guests=lambda: client().guests())
+        def tree():
+            c = client()
+            return group_guests_by_node(c.nodes(), c.guests())
+        return page("guests.html", tree=tree)
 
     @app.route("/storage")
     @login_required
