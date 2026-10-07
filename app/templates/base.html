@@ -19,7 +19,7 @@ th{background:#e9ecef}
 .tree summary{cursor:pointer;padding:.7rem 1rem;font-weight:600;display:flex;gap:.8rem;align-items:center;flex-wrap:wrap}
 .tree .meta{font-weight:400;color:#555;font-size:.9rem}
 .tree ul{list-style:none;margin:0 0 .5rem 1.6rem;padding:0 1rem .3rem 1rem;border-left:2px solid #c5cae9}
-.tree li{position:relative;padding:.35rem .6rem;display:flex;gap:.7rem;flex-wrap:wrap;align-items:center}
+.tree li{position:relative;padding:.35rem .6rem;display:grid;grid-template-columns:1fr 1fr 1fr;gap:.7rem;align-items:start}.tree .col{display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;min-width:0}
 .tree li::before{content:"";position:absolute;left:-1rem;top:50%;width:.8rem;border-top:2px solid #c5cae9}
 .badge{display:inline-block;padding:.1rem .5rem;border-radius:999px;font-size:.8rem;color:#fff;background:#868e96}
 .badge.ok{background:#2f9e44}.badge.bad{background:#e03131}.badge.type{background:#4263eb}
@@ -27,7 +27,7 @@ th{background:#e9ecef}
 .card{background:#fff;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12);padding:1rem}
 .card h2{margin-top:0;font-size:1.1rem}
 .warn{background:#fff3bf;padding:.6rem;border-radius:4px;margin-bottom:.5rem}
-.tree .comment{flex-basis:100%;display:flex;gap:.5rem;align-items:flex-start}.tree .comment textarea{flex:1;font:inherit}.tree .info{flex-basis:100%}.tree .info pre{white-space:pre-wrap;background:#f4f5f7;padding:.5rem;margin:.3rem 0}
+.tree .comment{margin-top:.3rem;display:flex;gap:.5rem;align-items:flex-start}.tree .comment textarea{flex:1;font:inherit}.tree .extra pre{white-space:pre-wrap;background:#f4f5f7;padding:.5rem;margin:.3rem 0}
 .kanban-column{background:#e9ecef;border-radius:8px;padding:.8rem;min-width:220px;flex:1}
 .kanban-column h3{margin:.1rem 0 .8rem;font-size:1rem}
 .todo-columns,.vm-columns{display:flex;gap:1rem;align-items:flex-start;overflow-x:auto;margin:1rem 0 2rem}

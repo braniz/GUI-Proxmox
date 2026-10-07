@@ -2,6 +2,7 @@
 <h1>VMs / Container pro Node</h1>
 {% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
 {% if tree is defined %}
+<label class="meta"><input type="checkbox" id="toggle-all-extra"> Alle Host-Infos &amp; Kommentare ausklappen</label>
 <div class="tree">
 {% for n in tree %}
 <details open>
@@ -9,19 +10,21 @@
 <span class="badge {{ 'ok' if n.info.status == 'online' else 'bad' }}">{{ n.info.status or 'unknown' }}</span>
 <span class="meta">CPU {{ n.info.cpu|pct }} · RAM {{ n.info.mem|gib }} / {{ n.info.maxmem|gib }} · {{ n.guests|length }} Gäste</span></summary>
 {% if n.guests %}<ul>
-{% for g in n.guests %}<li><span class="badge type">{{ 'VM' if g.type=='qemu' else 'LXC' }}</span>
+{% for g in n.guests %}<li><div class="col col-base"><span class="badge type">{{ 'VM' if g.type=='qemu' else 'LXC' }}</span>
 <strong>{{ g.vmid }}</strong> {{ g.name }}
-<span class="badge {{ 'ok' if g.status == 'running' else '' }}">{{ g.status }}</span>
-<span class="meta">CPU {{ g.cpu|pct }} · RAM {{ g.mem|gib }} / {{ g.maxmem|gib }}</span>
+<span class="badge {{ 'ok' if g.status == 'running' else '' }}">{{ g.status }}</span></div>
+<div class="col col-status"><span class="meta">CPU {{ g.cpu|pct }} · RAM {{ g.mem|gib }} / {{ g.maxmem|gib }}</span>
 {% if g.status == 'running' %}<span class="meta">IP: {{ g.ips|join(', ') if g.ips else 'unbekannt' }}</span>
-{% for s in g.services %}<span class="badge ok">{{ s }}</span>{% endfor %}{% endif %}
-{% if g.host_info %}<details class="info"><summary>Host-Info</summary><pre>{{ g.host_info }}</pre></details>{% endif %}
+{% for s in g.services %}<span class="badge ok">{{ s }}</span>{% endfor %}{% endif %}</div>
+<div class="col col-extra"><details class="extra"><summary>Host-Info &amp; Kommentar</summary>
+{% if g.host_info %}<pre>{{ g.host_info }}</pre>{% endif %}
 <form method="post" action="{{ url_for('save_comment', vmid=g.vmid) }}" class="comment">
 <input type="hidden" name="csrf" value="{{ csrf_token() }}">
 <textarea name="comment" rows="2" maxlength="{{ max_comment }}" placeholder="Kommentar">{{ g.comment }}</textarea>
-<button type="submit">Speichern</button></form></li>{% endfor %}
+<button type="submit">Speichern</button></form></details></div></li>{% endfor %}
 </ul>{% else %}<ul><li class="meta">Keine Gäste</li></ul>{% endif %}
 </details>
 {% endfor %}
 </div>
+<script src="{{ url_for('static', filename='guests.js') }}" defer></script>
 {% endif %}{% endblock %}
