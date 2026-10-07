@@ -28,6 +28,9 @@ th{background:#e9ecef}
 .card h2{margin-top:0;font-size:1.1rem}
 .warn{background:#fff3bf;padding:.6rem;border-radius:4px;margin-bottom:.5rem}
 .tree .comment{margin-top:.3rem;display:flex;gap:.5rem;align-items:flex-start}.tree .comment textarea{flex:1;font:inherit}.tree .extra pre{white-space:pre-wrap;background:#f4f5f7;padding:.5rem;margin:.3rem 0}
+.tree .meta{color:#343a40}.tree li{padding:.7rem .6rem;line-height:1.5;border-bottom:1px solid #d0d4da}.tree li:last-child{border-bottom:0}.tree li:nth-child(even){background:#f1f3f9}
+.tree .col+.col{border-left:1px solid #d0d4da;padding-left:.7rem}.tree .col-status .meta{font-weight:600}.tree .extra>summary{cursor:pointer;font-weight:600;color:#364fc7;padding:.1rem 0}
+.tree .extra pre{background:#fff;color:#212529;border:1px solid #ced4da;border-radius:4px;padding:.6rem;line-height:1.45}.tree .comment textarea{background:#fff;color:#212529;border:1px solid #adb5bd;border-radius:4px;padding:.3rem}
 .kanban-column{background:#e9ecef;border-radius:8px;padding:.8rem;min-width:220px;flex:1}
 .kanban-column h3{margin:.1rem 0 .8rem;font-size:1rem}
 .todo-columns,.vm-columns{display:flex;gap:1rem;align-items:flex-start;overflow-x:auto;margin:1rem 0 2rem}
@@ -41,6 +44,7 @@ th{background:#e9ecef}
 #todo-form input,#todo-form textarea,#todo-form select{font:inherit;padding:.45rem}.dialog-actions{justify-content:flex-end;margin-top:.6rem}
 .empty{color:#666;font-size:.9rem}
 @media(max-width:600px){main{padding:.6rem}.tree ul{margin-left:.5rem}}
+@media(max-width:800px){.tree li{grid-template-columns:1fr}.tree .col+.col{border-left:0;padding-left:0}}
 </style></head><body>
 {% if session.user %}
 <nav><a href="{{ url_for('overview') }}">Übersicht</a><a href="{{ url_for('nodes') }}">Nodes</a>
