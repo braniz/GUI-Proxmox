@@ -1,7 +1,19 @@
 {% extends "base.html" %}{% block content %}
-<h1>VMs / Container</h1>
-{% if guests is defined %}
-<table><tr><th>ID</th><th>Name</th><th>Typ</th><th>Node</th><th>Status</th><th>CPU</th><th>RAM</th></tr>
-{% for g in guests|sort(attribute='vmid') %}<tr><td>{{ g.vmid }}</td><td>{{ g.name }}</td><td>{{ 'VM' if g.type=='qemu' else 'LXC' }}</td>
-<td>{{ g.node }}</td><td>{{ g.status }}</td><td>{{ g.cpu|pct }}</td><td>{{ g.mem|gib }} / {{ g.maxmem|gib }}</td></tr>{% endfor %}</table>
+<h1>VMs / Container pro Node</h1>
+{% if tree is defined %}
+<div class="tree">
+{% for n in tree %}
+<details open>
+<summary>🖥 {{ n.name }}
+<span class="badge {{ 'ok' if n.info.status == 'online' else 'bad' }}">{{ n.info.status or 'unknown' }}</span>
+<span class="meta">CPU {{ n.info.cpu|pct }} · RAM {{ n.info.mem|gib }} / {{ n.info.maxmem|gib }} · {{ n.guests|length }} Gäste</span></summary>
+{% if n.guests %}<ul>
+{% for g in n.guests %}<li><span class="badge type">{{ 'VM' if g.type=='qemu' else 'LXC' }}</span>
+<strong>{{ g.vmid }}</strong> {{ g.name }}
+<span class="badge {{ 'ok' if g.status == 'running' else '' }}">{{ g.status }}</span>
+<span class="meta">CPU {{ g.cpu|pct }} · RAM {{ g.mem|gib }} / {{ g.maxmem|gib }}</span></li>{% endfor %}
+</ul>{% else %}<ul><li class="meta">Keine Gäste</li></ul>{% endif %}
+</details>
+{% endfor %}
+</div>
 {% endif %}{% endblock %}
