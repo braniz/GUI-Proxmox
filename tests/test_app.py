@@ -156,7 +156,14 @@ def test_comment_requires_login_and_csrf(tmp_path):
     r = c.post("/guests/100/comment", data={"comment": "<b>hi</b>", "csrf": token(c, "/guests")})
     assert r.status_code == 302
     from app.guestinfo import CommentStore
-    assert CommentStore(str(tmp_path / "c.json")).get(100) == "<b>hi</b>"
+    assert CommentStore(str(tmp_path / "c.json")).get(100).endswith("admin: <b>hi</b>")
+    stored = CommentStore(str(tmp_path / "c.json")).get(100)
+    assert stored.startswith("[") and "] admin: " in stored
+    c.post("/guests/100/comment", data={"comment": stored, "csrf": token(c, "/guests")})
+    assert CommentStore(str(tmp_path / "c.json")).get(100) == stored
+    c.post("/guests/100/comment", data={"comment": stored + "\nzwei", "csrf": token(c, "/guests")})
+    lines = CommentStore(str(tmp_path / "c.json")).get(100).split("\n")
+    assert lines[0] == stored and lines[1].endswith("admin: zwei")
 
 
 def test_guests_page_enriched(tmp_path, monkeypatch):
@@ -239,3 +246,22 @@ def test_read_host_info_is_optional_and_limited(tmp_path):
     path = tmp_path / "host.info"
     path.write_bytes(b"a" * (64 * 1024 + 10))
     assert len(read_host_info(str(path))) == 64 * 1024
+
+
+def test_kanban_shows_guest_host_info(tmp_path, monkeypatch):
+    from app import proxmox
+    app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True,
+                      "ADMIN_PASSWORD_HASH": generate_password_hash("pw"),
+                      "KANBAN_TODOS_DB": str(tmp_path / "todos.json"),
+                      "HOST_INFO_FILE": str(tmp_path / "none.info")})
+    monkeypatch.setattr(proxmox.ProxmoxClient, "guests", lambda self: [
+        {"vmid": 100, "name": "a", "node": "n", "type": "qemu", "status": "running"},
+        {"vmid": 101, "name": "b", "node": "n", "type": "qemu", "status": "stopped"}])
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_interfaces", lambda self, n, v: [])
+    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_file_read",
+                        lambda self, n, v, p: {"content": "<i>Zeile1</i>\nZeile2"})
+    c = app.test_client()
+    _login(c)
+    html = c.get("/kanban").get_data(as_text=True)
+    assert "&lt;i&gt;Zeile1&lt;/i&gt;\nZeile2" in html
+    assert "Keine Host-Info" in html
