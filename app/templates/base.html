@@ -55,7 +55,7 @@ th{background:#e9ecef}
 {% if session.user %}
 <nav><a href="{{ url_for('overview') }}">Übersicht</a><a href="{{ url_for('nodes') }}">Nodes</a>
 <a href="{{ url_for('guests') }}">VMs / Container</a><a href="{{ url_for('storage') }}">Storage</a>
-<a href="{{ url_for('status') }}">Status</a><a href="{{ url_for('kanban') }}">Kanban</a>
+<a href="{{ url_for('status') }}">Status</a><a href="{{ url_for('kanban') }}">Kanban</a><a href="{{ url_for('services') }}">Dienstüberwachung</a>
 <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf_token() }}"><button>Logout</button></form></nav>
 {% endif %}
 <main>{% if error %}<div class="error">{{ error }}</div>{% endif %}{% block content %}{% endblock %}</main>

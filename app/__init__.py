@@ -14,8 +14,8 @@ from werkzeug.security import check_password_hash
 
 from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
-                        extract_qemu_ips, parse_service_ports, parse_required_services,
-                        missing_services)
+                        extract_qemu_ips, parse_service_ports, missing_services,
+                        ServiceMonitorStore, DEFAULT_SERVICE_PORTS)
 from .kanban import TodoStore, read_host_info, validate_todo_fields
 from .proxmox import ProxmoxClient, ProxmoxError
 
@@ -85,14 +85,12 @@ def create_app(config=None):
         PVE_TOKEN_ID=os.environ.get("PVE_TOKEN_ID", ""),
         PVE_TOKEN_SECRET=os.environ.get("PVE_TOKEN_SECRET", ""),
         PVE_VERIFY_SSL=_verify_setting(os.environ.get("PVE_VERIFY_SSL")),
-        SERVICE_CHECK=os.environ.get("SERVICE_CHECK", "true").lower() in ("true", "1", "yes"),
-        SERVICE_PORTS=os.environ.get("SERVICE_PORTS", "22:ssh,80:http,443:https"),
-        AUTO_TODO_ENABLED=os.environ.get("AUTO_TODO_ENABLED", "false").lower() in ("true", "1", "yes"),
-        REQUIRED_SERVICES=os.environ.get("REQUIRED_SERVICES", ""),
         COMMENTS_DB=os.environ.get("COMMENTS_DB")
         or os.path.join(os.environ.get("DATA_DIR", "data"), "comments.json"),
         KANBAN_TODOS_DB=os.environ.get("KANBAN_TODOS_DB")
         or os.path.join(os.environ.get("DATA_DIR", "data"), "kanban-todos.json"),
+        SERVICE_MONITOR_DB=os.environ.get("SERVICE_MONITOR_DB")
+        or os.path.join(os.environ.get("DATA_DIR", "data"), "service-monitoring.json"),
         HOST_INFO_FILE=os.environ.get("HOST_INFO_FILE", "/srv/info/host.info"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -117,15 +115,19 @@ def create_app(config=None):
     def todos():
         return TodoStore(app.config["KANBAN_TODOS_DB"])
 
-    def create_service_todos(guests, ports):
-        """Legt für laufende Gäste mit nicht erreichbaren, benötigten Diensten je ein ToDo (Status planned) an."""
-        required = parse_required_services(app.config["REQUIRED_SERVICES"])
+    def monitor_store():
+        return ServiceMonitorStore(app.config["SERVICE_MONITOR_DB"])
+
+    service_ports = parse_service_ports(DEFAULT_SERVICE_PORTS)
+
+    def create_service_todos(guests, ports, selected):
+        """Legt für laufende Gäste mit nicht erreichbaren, in der GUI ausgewählten Diensten je ein ToDo (Status planned) an."""
         store = todos()
         for g in guests:
             if g.get("status") != "running" or not g.get("ips"):
                 continue
             vmid = g.get("vmid")
-            for service in missing_services(vmid, required, ports, g.get("services", [])):
+            for service in missing_services(selected.get(str(vmid), []), ports, g.get("services", [])):
                 name = g.get("name") or vmid
                 todo = {
                     "id": uuid4().hex,
@@ -157,7 +159,7 @@ def create_app(config=None):
                 g["ips"] = extract_lxc_ips(c.lxc_interfaces(g.get("node"), g.get("vmid")))
         except (ProxmoxError, ValueError, TypeError):
             pass
-        if app.config["SERVICE_CHECK"] and g["ips"]:
+        if g["ips"]:
             g["services"] = detect_services(g["ips"][0], ports)
         # host.info: nur QEMU (Guest Agent); LXC wird von der Proxmox-API nicht unterstützt
         if g.get("type") == "qemu":
@@ -229,7 +231,7 @@ def create_app(config=None):
                 session.permanent = True
                 destinations = {
                     url_for(name): name
-                    for name in ("overview", "nodes", "guests", "storage", "status", "kanban")
+                    for name in ("overview", "nodes", "guests", "storage", "status", "kanban", "services")
                 }
                 endpoint = destinations.get(request.args.get("next", ""), "overview")
                 return redirect(url_for(endpoint))
@@ -268,7 +270,7 @@ def create_app(config=None):
         def tree():
             c = client()
             gs = c.guests()
-            ports = parse_service_ports(app.config["SERVICE_PORTS"])
+            ports = service_ports
             saved = comments().all()
             with ThreadPoolExecutor(max_workers=8) as pool:
                 gs = list(pool.map(lambda g: enrich_guest(c, g, ports, saved), gs))
@@ -311,6 +313,30 @@ def create_app(config=None):
             return build_status(c.cluster_status(), ns, versions, app.config["PVE_VERIFY_SSL"])
         return page("status.html", st=build)
 
+    @app.route("/services", methods=["GET", "POST"])
+    @login_required
+    def services():
+        labels = [label for _, label in service_ports]
+        if request.method == "POST":
+            check_csrf()
+            selections = {}
+            for vmid in request.form.getlist("vmid"):
+                if vmid.isdigit() and len(vmid) <= 10:
+                    selections[vmid] = [x for x in request.form.getlist(f"svc-{vmid}") if x in labels]
+            try:
+                monitor_store().set_many(selections)
+                flash("Dienstüberwachung gespeichert.")
+            except OSError:
+                flash("Dienstüberwachung konnte nicht gespeichert werden.")
+            return redirect(url_for("services"))
+        error, guests = None, []
+        try:
+            guests = sorted(client().guests(), key=lambda g: g.get("vmid") or 0)
+        except ProxmoxError as exc:
+            error = str(exc)
+        return render_template("services.html", error=error, guests=guests, labels=labels,
+                               ports=service_ports, selected=monitor_store().all())
+
     @app.route("/kanban")
     @login_required
     def kanban():
@@ -318,12 +344,13 @@ def create_app(config=None):
         try:
             c = client()
             guests = c.guests()
-            auto = app.config["AUTO_TODO_ENABLED"] and app.config["SERVICE_CHECK"]
-            ports = parse_service_ports(app.config["SERVICE_PORTS"]) if auto else {}
+            selected = monitor_store().all()
+            wanted = {s for labels in selected.values() for s in labels}
+            ports = [p for p in service_ports if p[1] in wanted]
             with ThreadPoolExecutor(max_workers=8) as pool:
                 guests = list(pool.map(lambda g: enrich_guest(c, g, ports, {}), guests))
-            if auto:
-                create_service_todos(guests, ports)
+            if ports:
+                create_service_todos(guests, ports, selected)
         except ProxmoxError as exc:
             error = str(exc)
         return render_template(

@@ -1,3 +1,4 @@
+import os
 import re
 
 import pytest
@@ -188,9 +189,10 @@ def test_guests_template_has_new_button():
 def test_guests_page_enriched(tmp_path, monkeypatch):
     from app import proxmox
     app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True, "COMMENTS_DB": str(tmp_path / "c.json"),
-                      "SERVICE_CHECK": False, "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
+                      "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
     c = app.test_client()
     P = proxmox.ProxmoxClient
+    monkeypatch.setattr("app.detect_services", lambda ip, ports: [])
     monkeypatch.setattr(P, "nodes", lambda s: [{"node": "n1", "status": "online"}])
     monkeypatch.setattr(P, "guests", lambda s: [
         {"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": "running"},
@@ -312,9 +314,10 @@ def test_update_status_helpers():
 def test_guests_page_update_status(tmp_path, monkeypatch):
     from app import proxmox
     app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True, "COMMENTS_DB": str(tmp_path / "c.json"),
-                      "SERVICE_CHECK": False, "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
+                      "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
     c = app.test_client()
     P = proxmox.ProxmoxClient
+    monkeypatch.setattr("app.detect_services", lambda ip, ports: [])
     monkeypatch.setattr(P, "nodes", lambda s: [{"node": "n1", "status": "online"}])
     monkeypatch.setattr(P, "guests", lambda s: [
         {"node": "n1", "vmid": 100, "name": "web", "type": "qemu", "status": "running"},
@@ -335,28 +338,38 @@ def test_guests_page_update_status(tmp_path, monkeypatch):
     assert html.count("Reboot nötig: Ja") == 1 and html.count("Reboot nötig: Unbekannt") == 1
 
 
-def test_auto_todo_for_missing_required_service(tmp_path, monkeypatch):
+def test_missing_services():
     from app import guestinfo
-    from app.guestinfo import parse_required_services, missing_services
     ports = guestinfo.parse_service_ports("22:ssh,80:http,5432:postgres")
-    req = parse_required_services("100:ssh,postgres;*:http;x:y;101:all")
-    assert req == {"100": ["ssh", "postgres"], "*": ["http"], "101": ["all"]}
-    assert missing_services("100", req, ports, ["ssh"]) == ["http", "postgres"]
-    assert missing_services("101", req, ports, ["ssh"]) == ["http", "postgres"]
-    assert missing_services("5", {}, ports, []) == []
+    assert guestinfo.missing_services(["ssh", "postgres", "x"], ports, ["ssh"]) == ["postgres"]
+    assert guestinfo.missing_services([], ports, []) == []
 
+
+def test_env_service_config_removed(monkeypatch):
+    monkeypatch.setenv("SERVICE_CHECK", "false")
+    monkeypatch.setenv("REQUIRED_SERVICES", "*:all")
+    app = create_app({"SECRET_KEY": "x" * 32, "ADMIN_PASSWORD_HASH": "h"})
+    for key in ("SERVICE_CHECK", "SERVICE_PORTS", "AUTO_TODO_ENABLED", "REQUIRED_SERVICES"):
+        assert key not in app.config
+    example = open(os.path.join(os.path.dirname(__file__), "..", ".env.example")).read()
+    for key in ("SERVICE_CHECK", "SERVICE_PORTS", "AUTO_TODO_ENABLED", "REQUIRED_SERVICES",
+                "SERVICE_MONITOR_INTERVAL"):
+        assert key not in example
+
+
+def _services_app(tmp_path, monkeypatch):
     import app as app_module
     app = create_app({
         "SECRET_KEY": "x" * 32, "TESTING": True,
         "ADMIN_PASSWORD_HASH": generate_password_hash("pw"),
-        "AUTO_TODO_ENABLED": True, "REQUIRED_SERVICES": "100:ssh,http",
-        "SERVICE_PORTS": "22:ssh,80:http", "KANBAN_TODOS_DB": str(tmp_path / "t.json"),
+        "KANBAN_TODOS_DB": str(tmp_path / "t.json"),
+        "SERVICE_MONITOR_DB": str(tmp_path / "s.json"),
     })
 
     class FakeClient:
         def guests(self):
             return [{"vmid": 100, "name": "web", "type": "qemu", "node": "n", "status": "running"},
-                    {"vmid": 100 + 1, "name": "off", "type": "qemu", "node": "n", "status": "stopped"}]
+                    {"vmid": 101, "name": "off", "type": "qemu", "node": "n", "status": "stopped"}]
         def qemu_interfaces(self, node, vmid):
             return [{"name": "eth0", "ip-addresses": [{"ip-address": "10.0.0.5"}]}]
         def qemu_file_read(self, *a):
@@ -366,6 +379,31 @@ def test_auto_todo_for_missing_required_service(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "update_status", lambda f: (None, None))
     c = app.test_client()
     _login(c)
+    return app, c
+
+
+def test_services_tab_persistence_and_csrf(tmp_path, monkeypatch):
+    app, c = _services_app(tmp_path, monkeypatch)
+    html = c.get("/services").get_data(as_text=True)
+    assert "Dienstüberwachung" in html and "web" in html and 'value="http"' in html
+    assert c.post("/services", data={"vmid": "100", "svc-100": "http"}).status_code == 400
+    r = c.post("/services", data={"csrf": token(c, "/services"), "vmid": ["100", "101"],
+                                  "svc-100": ["http", "bogus"]})
+    assert r.status_code == 302
+    from app.guestinfo import ServiceMonitorStore
+    assert ServiceMonitorStore(str(tmp_path / "s.json")).all() == {"100": ["http"]}
+    assert re.search(r'value="http"[^>]*checked', c.get("/services").get_data(as_text=True))
+    anon = app.test_client()
+    assert anon.get("/services").status_code == 302
+
+
+def test_auto_todo_from_gui_selection_without_duplicates(tmp_path, monkeypatch):
+    app, c = _services_app(tmp_path, monkeypatch)
+    for _ in range(2):
+        assert c.get("/kanban").status_code == 200
+    assert c.get("/api/kanban/todos").get_json() == []
+    c.post("/services", data={"csrf": token(c, "/services"), "vmid": ["100", "101"],
+                              "svc-100": ["ssh", "http"], "svc-101": ["http"]})
     for _ in range(2):
         assert c.get("/kanban").status_code == 200
     todos = c.get("/api/kanban/todos").get_json()

@@ -1,0 +1,15 @@
+{% extends "base.html" %}{% block content %}
+<h1>Dienstüberwachung</h1>
+{% with msgs = get_flashed_messages() %}{% for m in msgs %}<div class="flash">{{ m }}</div>{% endfor %}{% endwith %}
+<p class="meta">Ausgewählte Dienste werden von außen per TCP-Connect geprüft. Ist ein Dienst nicht erreichbar, legt das Öffnen des Kanban-Boards ein ToDo an.</p>
+{% if guests %}
+<form method="post" action="{{ url_for('services') }}">
+<input type="hidden" name="csrf" value="{{ csrf_token() }}">
+<table><thead><tr><th>VMID</th><th>Server</th>{% for port, label in ports %}<th>{{ label }} ({{ port }})</th>{% endfor %}</tr></thead><tbody>
+{% for g in guests %}<tr><td>{{ g.vmid }}<input type="hidden" name="vmid" value="{{ g.vmid }}"></td><td>{{ g.name }}</td>
+{% for port, label in ports %}<td><input type="checkbox" name="svc-{{ g.vmid }}" value="{{ label }}" aria-label="{{ label }} auf {{ g.name }}"{% if label in selected.get(g.vmid|string, []) %} checked{% endif %}></td>{% endfor %}</tr>{% endfor %}
+</tbody></table>
+<p><button type="submit">Speichern</button></p>
+</form>
+{% elif not error %}<p class="empty">Keine Gäste</p>{% endif %}
+{% endblock %}
