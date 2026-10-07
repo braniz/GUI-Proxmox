@@ -83,3 +83,85 @@ Unter `/kanban` zeigt das passwortgeschützte Board vorhandene VMs und LXC-Conta
 ToDos werden thread-sicher in einer JSON-Datei gespeichert. `KANBAN_TODOS_DB` legt den Speicherort fest (Standard: `data/kanban-todos.json`, unter `DATA_DIR`, falls gesetzt). `HOST_INFO_FILE` konfiguriert die optionale Host-Info-Datei (Standard: `/srv/info/host.info`); maximal 64 KiB werden gelesen und im Board als escaped, vorformatierter Text angezeigt. Eine fehlende oder nicht lesbare Datei wird ignoriert.
 
 Tests: `python -m pytest`
+
+## Erweiterung / Optional
+
+### host.info automatisch erzeugen
+
+`/srv/info/host.info` ist ein **statischer Text**, der von der GUI nur gelesen und angezeigt, aber **nicht ausgeführt** wird. Der Inhalt kann daher in der Gast-VM automatisch per Bash-Script erzeugt werden, z. B. mit Hostname und letztem Reboot.
+
+Script `/usr/local/bin/update-host-info.sh` (ausführbar machen mit `sudo chmod +x /usr/local/bin/update-host-info.sh`):
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET="/srv/info/host.info"
+MANUAL="/srv/info/host.info.manual"   # optional: manuelle Ergänzungen
+
+mkdir -p "$(dirname "$TARGET")"
+TMP="$(mktemp "${TARGET}.XXXXXX")"
+trap 'rm -f "$TMP"' EXIT
+
+. /etc/os-release
+
+{
+  echo "Hostname:        $(hostname)"
+  echo "Letzter Reboot:  $(uptime -s)"
+  echo "Uptime:          $(uptime -p)"
+  echo "OS:              ${PRETTY_NAME:-unbekannt}"
+  echo "Kernel:          $(uname -r)"
+  echo "Aktualisiert:    $(date '+%Y-%m-%d %H:%M:%S')"
+  if [ -r "$MANUAL" ]; then
+    echo
+    cat "$MANUAL"
+  fi
+} > "$TMP"
+
+chmod 644 "$TMP"
+mv -f "$TMP" "$TARGET"
+trap - EXIT
+```
+
+Manuelle Ergänzungen (z. B. Zweck der VM, Ansprechpartner) können in `/srv/info/host.info.manual` stehen; der Inhalt wird vom Script an `host.info` angehängt.
+
+### systemd Service + Timer
+
+`/etc/systemd/system/host-info.service`:
+
+```ini
+[Unit]
+Description=host.info aktualisieren
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/update-host-info.sh
+```
+
+`/etc/systemd/system/host-info.timer`:
+
+```ini
+[Unit]
+Description=host.info beim Boot und regelmäßig aktualisieren
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target
+```
+
+Aktivieren:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now host-info.timer
+sudo systemctl start host-info.service   # sofort einmal ausführen
+```
+
+### Hinweise
+
+- Das Script schreibt **atomar**: erst in eine temporäre Datei, dann per `mv` an den Zielort. So liest die GUI nie eine halb geschriebene Datei.
+- Die Datei muss lesbar sein (z. B. `644`), damit der QEMU Guest Agent sie lesen kann.
+- Das Feature gilt nur für **QEMU-VMs** (nicht für LXC-Container).
