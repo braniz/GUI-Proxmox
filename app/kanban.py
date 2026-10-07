@@ -10,7 +10,9 @@ from datetime import datetime, timezone
 MAX_TODO_TITLE_LEN = 200
 MAX_TODO_DESCRIPTION_LEN = 5000
 MAX_HOST_INFO_BYTES = 64 * 1024
+MAX_COMMENT_LEN = 1000
 TODO_STATUSES = {"planned", "in_progress", "done"}
+BULK_ACTIONS = {"move", "edit", "done", "delete"}
 
 
 class TodoStore:
@@ -33,14 +35,30 @@ class TodoStore:
         with self._lock:
             return self._read()
 
-    def _write(self, todos):
-        directory = os.path.dirname(os.path.abspath(self.path))
+    @property
+    def audit_path(self):
+        root, ext = os.path.splitext(self.path)
+        return f"{root}-audit{ext or '.json'}"
+
+    def audit_log(self):
+        """Dauerhaftes Protokoll gelöschter ToDos (bleibt nach dem Löschen erhalten)."""
+        with self._lock:
+            try:
+                with open(self.audit_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                return [i for i in data if isinstance(i, dict)] if isinstance(data, list) else []
+            except (OSError, ValueError):
+                return []
+
+    def _write(self, todos, path=None):
+        path = path or self.path
+        directory = os.path.dirname(os.path.abspath(path))
         os.makedirs(directory, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=directory)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(todos, f, ensure_ascii=False)
-            os.replace(tmp, self.path)
+            os.replace(tmp, path)
         except BaseException:
             if os.path.exists(tmp):
                 os.unlink(tmp)
@@ -73,29 +91,96 @@ class TodoStore:
                 if t.get("auto_key") in keys and t.get("status") != "done":
                     t["status"] = "done"
                     t.setdefault("comments", []).append(comment)
+                    t.setdefault("history", []).append(make_history_entry(
+                        "done", comment.get("text", ""), comment.get("author", "unbekannt")))
                     closed.append(t)
             if closed:
                 self._write(todos)
         return closed
 
-    def update(self, todo_id, changes):
+    def update(self, todo_id, changes, entry=None):
         with self._lock:
             todos = self._read()
             todo = next((item for item in todos if item.get("id") == todo_id), None)
             if todo is None:
                 return None
             todo.update(changes)
+            if entry is not None:
+                todo.setdefault("history", []).append(dict(entry))
             self._write(todos)
             return todo
 
-    def delete(self, todo_id):
+    def delete(self, todo_id, entry=None):
         with self._lock:
             todos = self._read()
-            remaining = [item for item in todos if item.get("id") != todo_id]
-            if len(remaining) == len(todos):
+            removed = [item for item in todos if item.get("id") == todo_id]
+            if not removed:
                 return False
-            self._write(remaining)
+            self._archive(removed, entry)
+            self._write([item for item in todos if item.get("id") != todo_id])
             return True
+
+    def _archive(self, removed, entry):
+        """Hängt gelöschte ToDos samt Historie an das persistente Audit-Log an (Lock gehalten)."""
+        try:
+            with open(self.audit_path, encoding="utf-8") as f:
+                log = json.load(f)
+            if not isinstance(log, list):
+                log = []
+        except (OSError, ValueError):
+            log = []
+        for item in removed:
+            record = dict(item)
+            record["history"] = list(item.get("history") or []) + ([dict(entry)] if entry else [])
+            record["deleted_at"] = entry["time"] if entry else make_history_entry("delete", "", "")["time"]
+            log.append(record)
+        self._write(log, self.audit_path)
+
+    def bulk(self, ids, action, changes, entry):
+        """Wendet eine Aktion auf alle ToDos an; ein Schreibvorgang, Ergebnis pro ID."""
+        with self._lock:
+            todos = self._read()
+            by_id = {t.get("id"): t for t in todos}
+            results, hit = [], []
+            for todo_id in ids:
+                todo = by_id.get(todo_id)
+                if todo is None:
+                    results.append({"id": todo_id, "ok": False, "error": "ToDo nicht gefunden."})
+                    continue
+                hit.append(todo)
+                results.append({"id": todo_id, "ok": True})
+            if action == "delete":
+                if hit:
+                    self._archive(hit, entry)
+                    gone = {t["id"] for t in hit}
+                    self._write([t for t in todos if t.get("id") not in gone])
+            else:
+                for todo in hit:
+                    todo.update(changes)
+                    todo.setdefault("history", []).append(dict(entry))
+                if hit:
+                    self._write(todos)
+            return results
+
+
+def make_history_entry(action, comment, user):
+    """Server-seitig erzeugter Historieneintrag; Zeit und Benutzer kommen nie vom Client."""
+    return {
+        "time": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "user": user or "unbekannt",
+        "action": action,
+        "comment": comment,
+    }
+
+
+def validate_comment(data):
+    """Pflichtkommentar prüfen und normalisiert zurückgeben oder ValueError auslösen."""
+    comment = data.get("comment") if isinstance(data, dict) else None
+    if not isinstance(comment, str) or not comment.strip():
+        raise ValueError("Ein Kommentar ist erforderlich.")
+    if len(comment.strip()) > MAX_COMMENT_LEN:
+        raise ValueError(f"Der Kommentar darf höchstens {MAX_COMMENT_LEN} Zeichen lang sein.")
+    return comment.strip()
 
 
 def validate_todo_fields(data, require_title=False):

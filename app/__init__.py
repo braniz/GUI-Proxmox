@@ -16,7 +16,9 @@ from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_com
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
                         extract_qemu_ips, parse_service_ports, missing_services,
                         ServiceMonitorStore, DEFAULT_SERVICE_PORTS)
-from .kanban import TodoStore, read_host_info, validate_todo_fields
+from .kanban import (
+    BULK_ACTIONS, TodoStore, make_history_entry, read_host_info, validate_comment, validate_todo_fields,
+)
 from .proxmox import ProxmoxClient, ProxmoxError
 
 UPDATE_CACHE_TTL = 300  # Sekunden
@@ -386,6 +388,7 @@ def create_app(config=None):
                 "id": uuid4().hex,
                 **fields,
                 "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "history": [make_history_entry("create", "ToDo angelegt", session.get("user"))],
             }
             return jsonify(todos().create(todo)), 201
         except ValueError:
@@ -398,19 +401,30 @@ def create_app(config=None):
     def kanban_todo(todo_id):
         check_csrf()
         store = todos()
+        data = request.get_json(silent=True)
+        try:
+            comment = validate_comment(data)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        user = session.get("user")
         if request.method == "DELETE":
             try:
-                if not store.delete(todo_id):
+                if not store.delete(todo_id, make_history_entry("delete", comment, user)):
                     return jsonify(error="ToDo nicht gefunden."), 404
                 return "", 204
             except OSError:
                 return jsonify(error="ToDo konnte nicht gelöscht werden."), 500
-        data = request.get_json(silent=True)
         try:
             fields = validate_todo_fields(data)
             if not fields:
                 return jsonify(error="Keine Änderungen übermittelt."), 400
-            todo = store.update(todo_id, fields)
+            if fields.get("status") == "done":
+                action = "done"
+            elif set(fields) == {"status"}:
+                action = "move"
+            else:
+                action = "edit"
+            todo = store.update(todo_id, fields, make_history_entry(action, comment, user))
             if todo is None:
                 return jsonify(error="ToDo nicht gefunden."), 404
             return jsonify(todo)
@@ -418,6 +432,37 @@ def create_app(config=None):
             return jsonify(error="Ungültige ToDo-Daten."), 400
         except OSError:
             return jsonify(error="ToDo konnte nicht gespeichert werden."), 500
+
+    @app.route("/api/kanban/todos/bulk", methods=["POST"])
+    @login_required
+    def kanban_todos_bulk():
+        check_csrf()
+        data = request.get_json(silent=True)
+        try:
+            comment = validate_comment(data)
+            action = data.get("action")
+            ids = data.get("ids")
+            if action not in BULK_ACTIONS:
+                raise ValueError("Ungültige Aktion.")
+            if (not isinstance(ids, list) or not ids or len(ids) > 500
+                    or not all(isinstance(i, str) for i in ids)):
+                raise ValueError("Keine ToDos ausgewählt.")
+            ids = list(dict.fromkeys(ids))
+            changes = {}
+            if action == "move":
+                changes = validate_todo_fields({"status": data.get("status")})
+            elif action == "done":
+                changes = {"status": "done"}
+            elif action == "edit":
+                changes = validate_todo_fields({k: data[k] for k in ("title", "description", "vmid") if k in data})
+                if not changes:
+                    raise ValueError("Keine Änderungen übermittelt.")
+            entry = make_history_entry(action, comment, session.get("user"))
+            return jsonify(results=todos().bulk(ids, action, changes, entry))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except OSError:
+            return jsonify(error="ToDos konnten nicht gespeichert werden."), 500
 
     @app.template_filter("gib")
     def gib(v):
