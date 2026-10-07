@@ -1,6 +1,7 @@
 import hmac
 import os
 import secrets
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 
 from dotenv import load_dotenv
@@ -8,6 +9,9 @@ from flask import (Flask, abort, flash, redirect, render_template, request,
                    session, url_for)
 from werkzeug.security import check_password_hash
 
+from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore,
+                        clean_host_info, detect_services, extract_lxc_ips,
+                        extract_qemu_ips, parse_service_ports)
 from .proxmox import ProxmoxClient, ProxmoxError
 
 # Hash zum Angleichen der Laufzeit bei unbekanntem Benutzer
@@ -74,6 +78,10 @@ def create_app(config=None):
         PVE_TOKEN_ID=os.environ.get("PVE_TOKEN_ID", ""),
         PVE_TOKEN_SECRET=os.environ.get("PVE_TOKEN_SECRET", ""),
         PVE_VERIFY_SSL=_verify_setting(os.environ.get("PVE_VERIFY_SSL")),
+        SERVICE_CHECK=os.environ.get("SERVICE_CHECK", "true").lower() in ("true", "1", "yes"),
+        SERVICE_PORTS=os.environ.get("SERVICE_PORTS", "22:ssh,80:http,443:https"),
+        COMMENTS_DB=os.environ.get("COMMENTS_DB")
+        or os.path.join(os.environ.get("DATA_DIR", "data"), "comments.json"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "false").lower() == "true",
@@ -90,6 +98,33 @@ def create_app(config=None):
         c = app.config
         return ProxmoxClient(c["PVE_HOST"], c["PVE_PORT"], c["PVE_TOKEN_ID"],
                              c["PVE_TOKEN_SECRET"], c["PVE_VERIFY_SSL"])
+
+    def comments():
+        return CommentStore(app.config["COMMENTS_DB"])
+
+    def enrich_guest(c, g, ports, saved):
+        """Ergänzt IPs, Dienste und host.info; Fehler pro Gast werden abgefangen."""
+        g["ips"], g["services"], g["host_info"] = [], [], None
+        g["comment"] = saved.get(str(g.get("vmid")), "")
+        if g.get("status") != "running":
+            return g
+        try:
+            if g.get("type") == "qemu":
+                g["ips"] = extract_qemu_ips(c.qemu_interfaces(g.get("node"), g.get("vmid")))
+            else:
+                g["ips"] = extract_lxc_ips(c.lxc_interfaces(g.get("node"), g.get("vmid")))
+        except (ProxmoxError, ValueError, TypeError):
+            pass
+        if app.config["SERVICE_CHECK"] and g["ips"]:
+            g["services"] = detect_services(g["ips"][0], ports)
+        # host.info: nur QEMU (Guest Agent); LXC wird von der Proxmox-API nicht unterstützt
+        if g.get("type") == "qemu":
+            try:
+                g["host_info"] = clean_host_info(
+                    c.qemu_file_read(g.get("node"), g.get("vmid"), HOST_INFO_PATH))
+            except (ProxmoxError, ValueError, TypeError):
+                pass
+        return g
 
     def login_required(view):
         @wraps(view)
@@ -174,8 +209,28 @@ def create_app(config=None):
     def guests():
         def tree():
             c = client()
-            return group_guests_by_node(c.nodes(), c.guests())
-        return page("guests.html", tree=tree)
+            gs = c.guests()
+            ports = parse_service_ports(app.config["SERVICE_PORTS"])
+            saved = comments().all()
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                gs = list(pool.map(lambda g: enrich_guest(c, g, ports, saved), gs))
+            return group_guests_by_node(c.nodes(), gs)
+        return page("guests.html", tree=tree, max_comment=lambda: MAX_COMMENT_LEN)
+
+    @app.route("/guests/<int:vmid>/comment", methods=["POST"])
+    @login_required
+    def save_comment(vmid):
+        check_csrf()
+        text = request.form.get("comment", "")
+        if len(text.strip()) > MAX_COMMENT_LEN:
+            flash(f"Kommentar zu lang (max. {MAX_COMMENT_LEN} Zeichen).")
+        else:
+            try:
+                comments().set(vmid, text)
+                flash(f"Kommentar für VMID {vmid} gespeichert.")
+            except OSError:
+                flash("Kommentar konnte nicht gespeichert werden.")
+        return redirect(url_for("guests"))
 
     @app.route("/storage")
     @login_required

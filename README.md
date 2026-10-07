@@ -43,4 +43,22 @@ Der API-Token aus dem Abschnitt oben (`PVEAuditor`) wird als `PVE_TOKEN_ID` (`mo
 - Cookie-basierte Session (HttpOnly, SameSite=Lax), CSRF-Schutz für Login/Logout; alle Seiten außer `/login` erfordern eine Anmeldung.
 - Für den Produktivbetrieb hinter HTTPS `SESSION_COOKIE_SECURE=true` setzen und einen WSGI-Server (z. B. gunicorn `run:app`) nutzen. `PVE_VERIFY_SSL=true` beibehalten.
 
+### Gast-Details (IP, Dienste, Host-Info, Kommentare)
+
+Auf der Seite „VMs / Container pro Node“ werden für laufende Gäste IP-Adressen (ohne Loopback/link-local), offene Dienste und optional `/srv/info/host.info` angezeigt. Zusätzlich kann pro VM ein Kommentar gespeichert werden (max. 2000 Zeichen, Speicherung lokal in `COMMENTS_DB`, Standard `data/comments.json`).
+
+Voraussetzungen:
+
+- **QEMU**: QEMU Guest Agent muss im Gast installiert und aktiv sein (Option „Agent“ in der VM). Ohne Agent wird die IP als „unbekannt“ angezeigt.
+- **LXC**: IPs über `/nodes/{node}/lxc/{vmid}/interfaces`. `host.info` wird für LXC nicht unterstützt, da die Proxmox-API keinen lesenden Endpoint dafür bietet (ggf. später per SSH).
+- **Token-Rechte**: `PVEAuditor` allein reicht evtl. nicht für Agent-Abfragen. Zusätzlich eine Rolle mit `VM.GuestAgent.Audit` und `VM.GuestAgent.FileRead` (PVE 9) bzw. `VM.Monitor` (PVE 8) vergeben, z. B.:
+
+```bash
+pveum role add GuestAgentRead -privs "VM.GuestAgent.Audit VM.GuestAgent.FileRead"   # PVE 9
+pveum role add GuestAgentRead -privs "VM.Monitor"                                   # PVE 8
+pveum acl modify / -user monitor-user@pve -role GuestAgentRead
+```
+
+- **Dienste**: TCP-Connect-Check von der App zur IP des Gasts (Ports per `SERVICE_PORTS`, abschaltbar mit `SERVICE_CHECK=false`).
+
 Tests: `python -m pytest`

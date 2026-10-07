@@ -15,10 +15,10 @@ class ProxmoxClient:
         self.timeout = timeout
         self.headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
 
-    def _get(self, path, params=None):
+    def _get(self, path, params=None, timeout=None):
         try:
             r = requests.get(self.base + path, headers=self.headers, params=params,
-                             verify=self.verify, timeout=self.timeout)
+                             verify=self.verify, timeout=timeout or self.timeout)
             r.raise_for_status()
             return r.json().get("data") or []
         except (requests.RequestException, ValueError) as exc:
@@ -41,3 +41,17 @@ class ProxmoxClient:
 
     def node_version(self, node):
         return self._get(f"/nodes/{quote(str(node), safe='')}/version")
+
+    # Gast-Details (nur GET). Kurze Timeouts, da pro Gast abgefragt wird.
+    def qemu_interfaces(self, node, vmid):
+        """Benötigt QEMU Guest Agent im Gast."""
+        return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/network-get-interfaces",
+                         timeout=3)
+
+    def lxc_interfaces(self, node, vmid):
+        return self._get(f"/nodes/{quote(str(node), safe='')}/lxc/{int(vmid)}/interfaces", timeout=3)
+
+    def qemu_file_read(self, node, vmid, path):
+        """Datei per Guest Agent lesen. Für LXC bietet die Proxmox-API keinen GET-Endpoint."""
+        return self._get(f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent/file-read",
+                         {"file": path}, timeout=3)
