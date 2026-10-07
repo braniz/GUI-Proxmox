@@ -53,6 +53,16 @@ class TodoStore:
             self._write(todos)
         return todo
 
+    def create_unique(self, todo, key):
+        """Legt das ToDo nur an, wenn kein nicht erledigtes ToDo mit gleichem auto_key existiert."""
+        with self._lock:
+            todos = self._read()
+            if any(t.get("auto_key") == key and t.get("status") != "done" for t in todos):
+                return None
+            todos.append({**todo, "auto_key": key})
+            self._write(todos)
+        return todo
+
     def update(self, todo_id, changes):
         with self._lock:
             todos = self._read()

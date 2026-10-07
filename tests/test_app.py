@@ -333,3 +333,42 @@ def test_guests_page_update_status(tmp_path, monkeypatch):
     html = c.get("/guests").get_data(as_text=True)
     assert "Update vorhanden: Unbekannt" in html
     assert html.count("Reboot nötig: Ja") == 1 and html.count("Reboot nötig: Unbekannt") == 1
+
+
+def test_auto_todo_for_missing_required_service(tmp_path, monkeypatch):
+    from app import guestinfo
+    from app.guestinfo import parse_required_services, missing_services
+    ports = guestinfo.parse_service_ports("22:ssh,80:http,5432:postgres")
+    req = parse_required_services("100:ssh,postgres;*:http;x:y;101:all")
+    assert req == {"100": ["ssh", "postgres"], "*": ["http"], "101": ["all"]}
+    assert missing_services("100", req, ports, ["ssh"]) == ["http", "postgres"]
+    assert missing_services("101", req, ports, ["ssh"]) == ["http", "postgres"]
+    assert missing_services("5", {}, ports, []) == []
+
+    import app as app_module
+    app = create_app({
+        "SECRET_KEY": "x" * 32, "TESTING": True,
+        "ADMIN_PASSWORD_HASH": generate_password_hash("pw"),
+        "AUTO_TODO_ENABLED": True, "REQUIRED_SERVICES": "100:ssh,http",
+        "SERVICE_PORTS": "22:ssh,80:http", "KANBAN_TODOS_DB": str(tmp_path / "t.json"),
+    })
+
+    class FakeClient:
+        def guests(self):
+            return [{"vmid": 100, "name": "web", "type": "qemu", "node": "n", "status": "running"},
+                    {"vmid": 100 + 1, "name": "off", "type": "qemu", "node": "n", "status": "stopped"}]
+        def qemu_interfaces(self, node, vmid):
+            return [{"name": "eth0", "ip-addresses": [{"ip-address": "10.0.0.5"}]}]
+        def qemu_file_read(self, *a):
+            raise app_module.ProxmoxError("x")
+    monkeypatch.setattr(app_module, "ProxmoxClient", lambda *a, **k: FakeClient())
+    monkeypatch.setattr(app_module, "detect_services", lambda ip, ports: ["ssh"])
+    monkeypatch.setattr(app_module, "update_status", lambda f: (None, None))
+    c = app.test_client()
+    _login(c)
+    for _ in range(2):
+        assert c.get("/kanban").status_code == 200
+    todos = c.get("/api/kanban/todos").get_json()
+    assert len(todos) == 1
+    assert todos[0]["status"] == "planned" and todos[0]["vmid"] == "100"
+    assert "http" in todos[0]["title"]
