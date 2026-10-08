@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-INFO_FILE="/srv/info/host_info"
+INFO_FILE="/srv/info/apt_update_info"
 KEY="apt-update"
 
 mkdir -p /srv/info
