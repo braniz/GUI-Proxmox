@@ -12,7 +12,7 @@ from flask import (Flask, abort, flash, jsonify, redirect, render_template, requ
                    session, url_for)
 from werkzeug.security import check_password_hash
 
-from .guestinfo import (HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
+from .guestinfo import (APT_INFO_PATH, HOST_INFO_PATH, MAX_COMMENT_LEN, CommentStore, apply_comment_prefix,
                         clean_host_info, detect_services, update_status, extract_lxc_ips,
                         extract_qemu_ips, extract_qemu_hostname, extract_qemu_interfaces,
                         extract_fsinfo, parse_loadavg, count_cpus, parse_service_ports, missing_services,
@@ -322,13 +322,8 @@ def create_app(config=None):
             d["users"] = attempt("users", lambda: parse_users(c.qemu_users(node, vmid)))
             d["time"] = attempt("time", lambda: parse_time(c.qemu_time(node, vmid)))
             d["freeze"] = attempt("freeze", lambda: parse_fsfreeze_status(c.qemu_fsfreeze_status(node, vmid)))
-            try:
-                d["apt"] = parse_apt_update(c.qemu_apt_update_exec(node, vmid))
-                if d["apt"] is None:
-                    err["apt"] = True
-            except ProxmoxPermissionError:
-                err["apt_perm"] = True
-            except (ProxmoxError, ValueError, TypeError, AttributeError):
+            d["apt"] = attempt("apt", lambda: parse_apt_update(c.qemu_file_read(node, vmid, APT_INFO_PATH)))
+            if d["apt"] is None:
                 err["apt"] = True
         elif running and kind == "lxc":
             d["interfaces"] = [{"name": "", "mac": None, "ips": ips} for ips in

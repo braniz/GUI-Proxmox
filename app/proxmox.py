@@ -1,12 +1,7 @@
-"""Proxmox-Client: GET-Anfragen; einziger POST ist der fest verdrahtete Guest-Agent-Exec für das apt-Update."""
-import time
+"""Proxmox-Client: ausschließlich lesende GET-Anfragen."""
 from urllib.parse import quote
 
 import requests
-
-
-APT_UPDATE_COMMAND = ["stat", "-c", "%y", "/var/lib/apt/lists/"]
-EXEC_TIMEOUT = 8
 
 
 class ProxmoxError(Exception):
@@ -38,15 +33,6 @@ class ProxmoxClient:
         code = getattr(getattr(exc, "response", None), "status_code", None)
         cls = ProxmoxPermissionError if code in (401, 403) else ProxmoxError
         return cls(f"Proxmox-Abfrage fehlgeschlagen: {path} ({type(exc).__name__})")
-
-    def _post(self, path, data=None, timeout=None):
-        try:
-            r = requests.post(self.base + path, headers=self.headers, data=data,
-                              verify=self.verify, timeout=timeout or self.timeout)
-            r.raise_for_status()
-            return r.json().get("data") or {}
-        except (requests.RequestException, ValueError) as exc:
-            raise self._error(path, exc) from exc
 
     def cluster_status(self):
         return self._get("/cluster/status")
@@ -111,18 +97,3 @@ class ProxmoxClient:
 
     def lxc_config(self, node, vmid):
         return self._get(f"/nodes/{quote(str(node), safe='')}/lxc/{int(vmid)}/config", timeout=3)
-
-    def qemu_apt_update_exec(self, node, vmid, wait=EXEC_TIMEOUT):
-        """Führt den fest verdrahteten Befehl APT_UPDATE_COMMAND per Guest Agent aus (keine Eingabe möglich)."""
-        base = f"/nodes/{quote(str(node), safe='')}/qemu/{int(vmid)}/agent"
-        pid = self._post(f"{base}/exec", {"command": APT_UPDATE_COMMAND}, timeout=3).get("pid")
-        if not isinstance(pid, int) or isinstance(pid, bool):
-            raise ProxmoxError("Proxmox-Abfrage fehlgeschlagen: exec (keine PID)")
-        deadline = time.monotonic() + wait
-        while True:
-            st = self._get(f"{base}/exec-status", {"pid": pid}, timeout=3)
-            if isinstance(st, dict) and st.get("exited"):
-                return st
-            if time.monotonic() >= deadline:
-                raise ProxmoxError("Proxmox-Abfrage fehlgeschlagen: exec-status (Zeitüberschreitung)")
-            time.sleep(0.3)
