@@ -23,7 +23,7 @@ pveum user token add monitor-user@pve monitoring-token -privsep 0
 
 ## Web-UI (read-only Proxmox-Viewer)
 
-Passwortgeschützte Flask-Weboberfläche zur Anzeige von Cluster-Übersicht, Nodes, VMs/Containern und Storage. Die App führt ausschließlich `GET`-Anfragen gegen die Proxmox-API aus (keine Schreibfunktionen).
+Passwortgeschützte Flask-Weboberfläche zur Anzeige von Cluster-Übersicht, Nodes, VMs/Containern und Storage. Die App führt ausschließlich `GET`-Anfragen gegen die Proxmox-API aus (keine Schreibzugriffe).
 
 ### Installation und Start
 
@@ -46,14 +46,14 @@ Der API-Token aus dem Abschnitt oben (`PVEAuditor`) wird als `PVE_TOKEN_ID` (`mo
 
 ### Gast-Details (IP, Dienste, Host-Info, Kommentare)
 
-Auf der Seite „VMs / Container pro Node“ werden für laufende Gäste IP-Adressen (ohne Loopback/link-local), offene Dienste und optional `/srv/info/host.info` angezeigt. Zusätzlich kann pro VM ein Kommentar gespeichert werden (max. 2000 Zeichen, Speicherung lokal in `COMMENTS_DB`, Standard `data/comments.json`).
+Auf der Seite „VMs / Container pro Node“ werden für laufende Gäste IP-Adressen (ohne Loopback/link-local), offene Dienste und optional `/srv/info/host.info` angezeigt. Zusätzlich kann pro VM eine Kommentar-Notiz hinterlegt werden.
 
 Voraussetzungen:
 
 - **QEMU**: QEMU Guest Agent muss auf der Gast-VM installiert und aktiviert sein, damit IPs, Host-Info und weitere Agent-Daten verfügbar sind. Ohne Agent wird die IP als „unbekannt“ angezeigt.
 - **LXC**: IPs über `/nodes/{node}/lxc/{vmid}/interfaces`. `host.info` wird für LXC nicht unterstützt, da die Proxmox-API keinen lesenden Endpoint dafür bietet (ggf. später per SSH).
-- **Gast-Detailseite**: Klick auf den Hostnamen öffnet `/guests/<vmid>` (Hostname, IPs, Filesystem, CPU-Last per QEMU Guest Agent; bei LXC nur Basisdaten). Zusätzlich: Betriebssystem, angemeldete Benutzer, Gastzeit, Dateisystem-Freeze (nur Status), letztes apt-Update und die VM-Konfiguration (`qm config`, sensible Werte maskiert). Der Abschnitt „Letztes apt-Update“ liest per Guest Agent (nur lesend, kein `guest exec`) die Datei `/srv/info/host_info` und erwartet darin eine Zeile mit dem Präfix `apt-update:` (z. B. `apt-update: 2024-05-01 10:11:12 +0200`); fehlt die Datei oder die Zeile, zeigt der Abschnitt „Nicht verfügbar“. Der Agent muss in Proxmox unter „Options > QEMU Guest Agent“ aktiviert sein.
-- **Token-Rechte**: `PVEAuditor` allein reicht evtl. nicht für Agent-Abfragen. Zusätzlich eine Rolle mit `VM.GuestAgent.Audit` und `VM.GuestAgent.FileRead` (PVE 9) bzw. `VM.Monitor` (PVE 8) vergeben, z. B.:
+- **Gast-Detailseite**: Klick auf den Hostnamen öffnet `/guests/<vmid>` (Hostname, IPs, Filesystem, CPU-Last per QEMU Guest Agent; bei LXC nur Basisdaten). Zusätzlich: Betriebssystem, angemeldete Benutzer, Uptime, `fsfreeze`-Status und weitere Agent-Infos.
+- **Token-Rechte**: `PVEAuditor` allein reicht evtl. nicht für Agent-Abfragen. Zusätzlich eine Rolle mit `VM.GuestAgent.Audit` und `VM.GuestAgent.FileRead` (PVE 9) bzw. `VM.Monitor` (PVE 8) vergeben:
 
 ```bash
 pveum role add GuestAgentRead -privs "VM.GuestAgent.Audit VM.GuestAgent.FileRead"   # PVE 9
@@ -74,29 +74,47 @@ sudo dnf install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-a
 sudo zypper install -y qemu-guest-agent && sudo systemctl enable --now qemu-guest-agent
 ```
 
-Anschließend in Proxmox bei der VM unter **Options** → **QEMU Guest Agent** aktivieren. Den Agent-Status in der Gast-VM mit `sudo systemctl status qemu-guest-agent` oder die Verbindung auf dem Proxmox-Host mit `qm agent <VMID> ping` prüfen.
+Anschließend in Proxmox bei der VM unter **Options** → **QEMU Guest Agent** aktivieren. Den Agent-Status in der Gast-VM mit `sudo systemctl status qemu-guest-agent` oder die Verbindung auf dem Host prüfen.
 
 - **Dienste**: TCP-Connect-Check von der App zur IP des Gasts (Standard-Ports für ssh, http, https u. a.; die extern überwachten Dienste werden im Tab „Dienstüberwachung“ gewählt).
 
 ### Kanbanboard
 
-Unter `/kanban` zeigt das passwortgeschützte Board vorhandene VMs und LXC-Container getrennt nach laufend/gestoppt. ToDos können angelegt, bearbeitet, gelöscht und per Drag & Drop zwischen „Geplant / ToDo“, „In Arbeit“ und „Erledigt“ verschoben werden; optional lassen sie sich einer VM bzw. einem Container zuordnen. Änderungen an ToDos erfordern die bestehende Anmeldung und den CSRF-Schutz. Ist Proxmox nicht erreichbar, bleiben ToDos und Host-Info weiterhin verfügbar.
+Unter `/kanban` zeigt das passwortgeschützte Board vorhandene VMs und LXC-Container getrennt nach laufend/gestoppt. ToDos können angelegt, bearbeitet, gelöscht und per Drag & Drop zwischen „Geplant“, „In Arbeit“ und „Fertig“ verschoben werden.
 
-**Dienstüberwachung & automatische ToDos**: Im Tab „Dienstüberwachung“ (`/services`) wird pro Server/Gast gewählt, welche Dienste (ssh, http, https, ftp, smtp, dns, smb, mysql, rdp, postgres) von außen per TCP-Connect überwacht werden. Die Auswahl wird in `data/service-monitoring.json` gespeichert (`SERVICE_MONITOR_DB` bzw. `DATA_DIR`); Änderungen erfordern Anmeldung und CSRF-Schutz. Das Öffnen von `/kanban` legt für jeden laufenden Gast mit ermittelbarer IP, bei dem ein gewählter Dienst nicht erreichbar ist, ein ToDo in „Geplant / ToDo“ an. Pro Gast und Dienst wird kein zweites ToDo angelegt, solange das vorhandene nicht „Erledigt“ ist. Die früheren `.env`-Variablen `SERVICE_CHECK`, `SERVICE_PORTS`, `AUTO_TODO_ENABLED`, `REQUIRED_SERVICES` und `SERVICE_MONITOR_INTERVAL` entfallen.
+**Dienstüberwachung & automatische ToDos**: Im Tab „Dienstüberwachung“ (`/services`) wird pro Server/Gast gewählt, welche Dienste (ssh, http, https, ftp, smtp, dns, smb, mysql, rdp, postgresql, mongodb, redis) überwacht werden. Fällt ein Dienst aus oder ist ein Gast nicht erreichbar, legt die App automatisch ein ToDo an oder aktualisiert die Historie; bestehende ToDos werden nicht dupliziert.
 
-**Mehrfachbearbeitung & Historie**: Jede ToDo-Karte hat eine Checkbox; pro Spalte wählt „Alle auswählen“ alle ToDos der Spalte. Sobald mindestens ein ToDo ausgewählt ist, erscheint eine Aktionsleiste mit der Anzahl und den Aktionen Verschieben, Bearbeiten (Titel/Beschreibung/VMID für alle Ausgewählten), Erledigen und Löschen (`POST /api/kanban/todos/bulk` mit `ids`, `action`, `comment` und aktionsspezifischen Feldern; Antwort mit Ergebnis pro ToDo). Jede Aktion – auch an einzelnen ToDos (`PUT`/`DELETE /api/kanban/todos/<id>`) – erfordert einen nicht leeren Kommentar (client- und serverseitig, sonst HTTP 400). Pro Aktion wird am ToDo ein unveränderlicher Historieneintrag (Zeit in UTC, angemeldeter Benutzer, Aktion, Kommentar) vom Server erzeugt; Zeit und Benutzer können vom Client nicht vorgegeben werden, Einträge sind weder über UI noch API änderbar oder löschbar und werden auf der Karte in einem aufklappbaren Bereich („Historie“) in de-DE-Zeitformat angezeigt. Gelöschte ToDos bleiben mit ihrer Historie in einem separaten Audit-Log neben der ToDo-Datei erhalten (`kanban-todos-audit.json`).
+**Mehrfachbearbeitung & Historie**: Jede ToDo-Karte hat eine Checkbox; pro Spalte wählt „Alle auswählen“ alle ToDos der Spalte. Sobald mindestens ein ToDo ausgewählt ist, erscheint eine Aktionsleiste zum Verschieben, Abschließen oder Löschen mehrerer Karten auf einmal. Jede Änderung erhält eine kommentierte Historie.
 
-**apt-Update-Überwachung**: Beim Öffnen von `/kanban` wird für jeden laufenden QEMU-Gast die Zeile `apt-update:` aus `/srv/info/host_info` (Guest Agent) gelesen. Liegt der Zeitstempel länger als `APT_UPDATE_MAX_AGE_DAYS` Tage zurück (Standard: 30; ohne Zeitzone gilt UTC), wird ein ToDo „apt-Update überfällig: …“ in „Geplant / ToDo“ angelegt (Historie: Benutzer `apt-monitor`); pro Gast höchstens ein offenes ToDo.
+**apt-Update-Überwachung**: Beim Öffnen von `/kanban` wird für jeden laufenden QEMU-Gast die Zeile `apt-update:` aus `/srv/info/host_info` (Guest Agent) gelesen. Liegt der Zeitstempel länger als der konfigurierte Grenzwert zurück, wird automatisch ein ToDo erzeugt.
 
-ToDos werden thread-sicher in einer JSON-Datei gespeichert. `KANBAN_TODOS_DB` legt den Speicherort fest (Standard: `data/kanban-todos.json`, unter `DATA_DIR`, falls gesetzt). `HOST_INFO_FILE` konfiguriert die optionale Host-Info-Datei (Standard: `/srv/info/host.info`); maximal 64 KiB werden gelesen und im Board als escaped, vorformatierter Text angezeigt. Eine fehlende oder nicht lesbare Datei wird ignoriert.
+ToDos werden thread-sicher in einer JSON-Datei gespeichert. `KANBAN_TODOS_DB` legt den Speicherort fest (Standard: `data/kanban-todos.json`, unter `DATA_DIR`, falls gesetzt). `HOST_INFO_FILE` konfiguriert die Datei für die Host-Info-Lesezugriffe.
 
 Tests: `python -m pytest`
 
 ## Erweiterung / Optional
 
+### helper/
+
+Im Verzeichnis `helper/` liegen kleine Hilfsskripte und Beispiel-Konfigurationen für die Pflege von `/srv/info/host_info`.
+
+#### Inhalt
+
+- `helper/check-apt-update.sh`  
+  Aktualisiert ausschließlich die Zeile `apt-update:` in `/srv/info/host_info`.  
+  Alle anderen Inhalte der Datei bleiben unverändert.
+
+- `helper/check-apt-update.cron`  
+  Beispiel für einen Cron-Eintrag, der das Script regelmäßig ausführt.
+
+#### Zweck
+
+Die Dateien in `helper/` unterstützen die Gast-Detailseite und die apt-Update-Überwachung in der GUI.  
+So kann die App den Zeitpunkt des letzten apt-Updates aus `/srv/info/host_info` lesen, ohne dass die Datei komplett neu geschrieben wird.
+
 ### host.info automatisch erzeugen
 
-`/srv/info/host.info` ist ein **statischer Text**, der von der GUI nur gelesen und angezeigt, aber **nicht ausgeführt** wird. Der Inhalt kann daher in der Gast-VM automatisch per Bash-Script erzeugt werden, z. B. mit Hostname und letztem Reboot.
+`/srv/info/host.info` ist ein **statischer Text**, der von der GUI nur gelesen und angezeigt, aber **nicht ausgeführt** wird. Der Inhalt kann daher in der Gast-VM automatisch per Bash-Script erzeugt werden.
 
 Script `/usr/local/bin/update-host-info.sh` (ausführbar machen mit `sudo chmod +x /usr/local/bin/update-host-info.sh`):
 
@@ -176,4 +194,4 @@ sudo systemctl start host-info.service   # sofort einmal ausführen
 
 ## prox-agent (Gast-Agent)
 
-Im Verzeichnis [`agent/`](agent/README.md) liegt ein systemd-Agent, der auf VMs installiert wird und Systeminformationen als JSON bereitstellt (Erweiterungen unter `/usr/lib/prox-agent/plugin` und `/usr/lib/prox-agent/local`).
+Im Verzeichnis [`agent/`](agent/README.md) liegt ein systemd-Agent, der auf VMs installiert wird und Systeminformationen als JSON bereitstellt (Erweiterungen unter `/usr/lib/prox-agent/plugin` und `/usr/lib/prox-agent/local`). Der Agent kann optional die lokale Datei `/srv/info/host.info` mit ausliefern.
