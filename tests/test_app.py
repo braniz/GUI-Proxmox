@@ -740,3 +740,30 @@ def test_guest_detail_lxc_and_stopped_config(tmp_path, monkeypatch):
     html = c.get("/guests/100").get_data(as_text=True)
     assert "Gast läuft nicht." in html and "VM-Konfiguration (qm config)" in html
     assert "Betriebssystem" not in html and "s3cret" not in html
+
+
+def test_apt_update_parsing_and_todo(tmp_path):
+    from datetime import datetime, timezone
+    from app.aptmonitor import create_apt_todos, parse_timestamp
+    from app.kanban import TodoStore
+    assert parse_timestamp("2024-05-01 10:11:12 +0200").utcoffset().total_seconds() == 7200
+    assert parse_timestamp("2024-05-01T10:11:12Z").tzinfo is not None
+    assert parse_timestamp("2024-05-01T10:11:12+02:00").utcoffset().total_seconds() == 7200
+    assert parse_timestamp("2024-05-01 10:11:12").utcoffset().total_seconds() == 0
+    assert parse_timestamp("müll") is None
+
+    class Client:
+        def qemu_file_read(self, node, vmid, path):
+            stamp = {1: "2024-01-01 00:00:00 +0000", 2: "2024-05-20 00:00:00 +0000"}.get(vmid)
+            return {"content": f"foo: bar\napt-update: {stamp}\n"} if stamp else {"content": "x"}
+
+    guests = [{"vmid": v, "name": f"vm{v}", "node": "n", "type": "qemu", "status": "running"} for v in (1, 2, 3)]
+    guests.append({"vmid": 4, "type": "lxc", "status": "running"})
+    guests.append({"vmid": 1, "type": "qemu", "status": "stopped"})
+    store = TodoStore(str(tmp_path / "t.json"))
+    now = datetime(2024, 6, 1, tzinfo=timezone.utc)
+    assert len(create_apt_todos(Client(), guests, store, 30, now)) == 1
+    assert create_apt_todos(Client(), guests, store, 30, now) == []
+    (todo,) = store.all()
+    assert todo["title"].startswith("apt-Update überfällig") and todo["status"] == "planned"
+    assert todo["history"][0]["user"] == "apt-monitor" and todo["history"][0]["comment"]
