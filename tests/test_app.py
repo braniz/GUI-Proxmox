@@ -767,3 +767,23 @@ def test_apt_update_parsing_and_todo(tmp_path):
     (todo,) = store.all()
     assert todo["title"].startswith("apt-Update überfällig") and todo["status"] == "planned"
     assert todo["history"][0]["user"] == "apt-monitor" and todo["history"][0]["comment"]
+
+
+def test_cpubar_filter():
+    app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True,
+                      "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
+    f = app.jinja_env.filters["cpubar"]
+    assert "width:42%" in f(0.42) and "CPU 42 %" in f(0.42)
+    assert "high" in f(0.95) and "width:100%" in f(5)
+    assert "na" in f(None) and "na" in f("x")
+
+
+def test_guests_page_cpu_bar(client, monkeypatch):
+    from app import proxmox
+    monkeypatch.setattr(proxmox.ProxmoxClient, "nodes", lambda s: [{"node": "n1", "status": "online", "cpu": 0.1}])
+    monkeypatch.setattr(proxmox.ProxmoxClient, "guests",
+                        lambda s: [{"node": "n1", "vmid": 100, "name": "web", "type": "qemu",
+                                    "status": "running", "cpu": 0.5}])
+    client.post("/login", data={"username": "admin", "password": "pw", "csrf": token(client)})
+    html = client.get("/guests").get_data(as_text=True)
+    assert "cpubar-fill" in html and "width:50%" in html

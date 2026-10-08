@@ -8,6 +8,7 @@ from functools import wraps
 from uuid import uuid4
 
 from dotenv import load_dotenv
+from markupsafe import Markup
 from flask import (Flask, abort, flash, jsonify, redirect, render_template, request,
                    session, url_for)
 from werkzeug.security import check_password_hash
@@ -571,5 +572,20 @@ def create_app(config=None):
             return f"{float(v) * 100:.0f} %"
         except Exception:
             return "-"
+
+    @app.template_filter("cpubar")
+    def cpubar(v):
+        try:
+            val = float(v)
+            if val != val:
+                raise ValueError
+        except Exception:
+            return Markup('<span class="cpubar na" title="CPU nicht verfügbar">CPU -</span>')
+        val = max(0.0, min(val, 1.0)) * 100
+        level = "high" if val >= 90 else ("mid" if val >= 70 else "low")
+        return Markup(
+            f'<span class="cpubar {level}" title="CPU-Last {val:.0f} %">'
+            f'<span class="cpubar-track"><span class="cpubar-fill" style="width:{val:.0f}%"></span></span>'
+            f'<span class="cpubar-label">CPU {val:.0f} %</span></span>')
 
     return app

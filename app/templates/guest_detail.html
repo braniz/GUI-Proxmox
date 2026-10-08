@@ -24,7 +24,8 @@
 <h2>CPU-Last</h2>
 {% if d.load %}<p>Load Average (1/5/15 min): {{ d.load[0] }} / {{ d.load[1] }} / {{ d.load[2] }}</p>
 {% else %}<p class="meta">Load Average nicht verfügbar{% if err.load %} ({{ hint }}){% endif %}.</p>{% endif %}
-<p class="meta">CPUs: {{ d.cpus if d.cpus else 'nicht verfügbar' }} · Aktuelle CPU-Auslastung: {{ d.cpu_usage|pct if d.cpu_usage is not none else 'nicht verfügbar' }}</p>
+<p><span class="cpubar-lg">{{ d.cpu_usage|cpubar }}</span></p>
+<p class="meta">CPUs: {{ d.cpus if d.cpus else 'nicht verfügbar' }}</p>
 <h2>Betriebssystem</h2>
 {% if err.osinfo %}<p class="meta">{{ hint }}</p>
 {% elif d.osinfo %}<table>{% for k, v in d.osinfo %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table>
