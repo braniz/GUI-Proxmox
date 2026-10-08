@@ -1,0 +1,2 @@
+# Prüft regelmäßig das apt-update und aktualisiert nur die apt-update-Zeile
+*/30 * * * * root /usr/local/bin/check-apt-update.sh
