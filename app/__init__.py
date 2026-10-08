@@ -18,6 +18,7 @@ from .guestinfo import (APT_INFO_PATH, HOST_INFO_PATH, MAX_COMMENT_LEN, CommentS
                         extract_fsinfo, parse_loadavg, count_cpus, parse_service_ports, missing_services,
                         ServiceMonitorStore, DEFAULT_SERVICE_PORTS, parse_osinfo, parse_users, parse_time,
                         parse_fsfreeze_status, parse_apt_update, mask_config)
+from .aptmonitor import create_apt_todos, parse_max_age
 from .kanban import (
     BULK_ACTIONS, TodoStore, make_history_entry, read_host_info, validate_comment, validate_todo_fields,
 )
@@ -97,6 +98,7 @@ def create_app(config=None):
         or os.path.join(os.environ.get("DATA_DIR", "data"), "kanban-todos.json"),
         SERVICE_MONITOR_DB=os.environ.get("SERVICE_MONITOR_DB")
         or os.path.join(os.environ.get("DATA_DIR", "data"), "service-monitoring.json"),
+        APT_UPDATE_MAX_AGE_DAYS=os.environ.get("APT_UPDATE_MAX_AGE_DAYS", "30"),
         HOST_INFO_FILE=os.environ.get("HOST_INFO_FILE", "/srv/info/host.info"),
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -456,6 +458,7 @@ def create_app(config=None):
                 guests = list(pool.map(lambda g: enrich_guest(c, g, ports, {}), guests))
             if ports:
                 create_service_todos(guests, ports, selected)
+            create_apt_todos(c, guests, todos(), parse_max_age(app.config["APT_UPDATE_MAX_AGE_DAYS"]))
         except ProxmoxError as exc:
             error = str(exc)
         return render_template(
