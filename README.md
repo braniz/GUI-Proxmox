@@ -94,6 +94,15 @@ Tests: `python -m pytest`
 
 ## Erweiterung / Optional
 
+### helper/
+
+Im Verzeichnis `helper/` liegen kleine Hilfsskripte und Beispiel-Konfigurationen für die Pflege von Gast-Informationen und die apt-Update-Überwachung:
+
+- `helper/check-apt-update.sh` aktualisiert ausschließlich die Zeile `apt-update:` in `/srv/info/host_info`; andere Einträge bleiben erhalten.
+- `helper/check-apt-update.cron` zeigt einen Beispiel-Cron-Eintrag für die regelmäßige Ausführung des Scripts.
+
+Die Dateien ergänzen die Gast-Detailseite und die apt-Update-Überwachung der GUI.
+
 ### host.info automatisch erzeugen
 
 `/srv/info/host.info` ist ein **statischer Text**, der von der GUI nur gelesen und angezeigt, aber **nicht ausgeführt** wird. Der Inhalt kann daher in der Gast-VM automatisch per Bash-Script erzeugt werden, z. B. mit Hostname und letztem Reboot.
