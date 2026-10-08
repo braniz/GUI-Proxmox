@@ -174,6 +174,15 @@ sudo systemctl start host-info.service   # sofort einmal ausführen
 - Die Datei muss lesbar sein (z. B. `644`), damit der QEMU Guest Agent sie lesen kann.
 - Das Feature gilt nur für **QEMU-VMs** (nicht für LXC-Container).
 
+### helper/
+
+Im Verzeichnis `helper/` liegen kleine Betriebsskripte und Konfigurationsbeispiele rund um Gast-Informationen und die apt-Update-Überwachung:
+
+- `helper/check-apt-update.sh` aktualisiert ausschließlich die Zeile `apt-update:` in `/srv/info/host_info`; andere Einträge bleiben unverändert.
+- `helper/check-apt-update.cron` enthält einen Beispiel-Cron-Eintrag für die regelmäßige Ausführung des Skripts.
+
+Die Dateien ergänzen die Gast-Detailseite und die apt-Update-Überwachung der GUI.
+
 ## prox-agent (Gast-Agent)
 
 Im Verzeichnis [`agent/`](agent/README.md) liegt ein systemd-Agent, der auf VMs installiert wird und Systeminformationen als JSON bereitstellt (Erweiterungen unter `/usr/lib/prox-agent/plugin` und `/usr/lib/prox-agent/local`).
