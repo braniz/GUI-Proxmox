@@ -12,6 +12,8 @@ from concurrent.futures import ThreadPoolExecutor
 MAX_COMMENT_LEN = 2000
 MAX_HOST_INFO_BYTES = 8 * 1024
 HOST_INFO_PATH = "/srv/info/host.info"
+APT_INFO_PATH = "/srv/info/host_info"
+APT_UPDATE_PREFIX = "apt-update:"
 OS_RELEASE_PATH = "/etc/os-release"
 REBOOT_REQUIRED_PATH = "/var/run/reboot-required"
 UPDATES_AVAILABLE_PATH = "/var/lib/update-notifier/updates-available"
@@ -408,15 +410,6 @@ def parse_fsfreeze_status(data):
         data.strip().lower() if isinstance(data, str) else None)
 
 
-def decode_exec_result(data):
-    """(exitcode, stdout, stderr) aus exec-status; Text kommt bereits dekodiert von Proxmox."""
-    if not isinstance(data, dict):
-        return None, "", ""
-    code = data.get("exitcode")
-    return (code if isinstance(code, int) and not isinstance(code, bool) else None,
-            str(data.get("out-data") or ""), str(data.get("err-data") or ""))
-
-
 def format_stat_time(text):
     """'2024-05-01 10:11:12.123456789 +0200' -> '01.05.2024 10:11:12 (+0200)'; sonst Originaltext."""
     text = (text or "").strip()
@@ -428,11 +421,16 @@ def format_stat_time(text):
 
 
 def parse_apt_update(data):
-    """Formatierter Zeitstempel aus exec-status von 'stat -c %y'; None bei Fehler/leerer Ausgabe."""
-    code, out, _ = decode_exec_result(data)
-    if code != 0 or not out.strip():
+    """Formatierter Zeitstempel aus der 'apt-update:'-Zeile von /srv/info/host_info; None wenn nicht vorhanden/leer."""
+    content = data.get("content") if isinstance(data, dict) else None
+    if not isinstance(content, str):
         return None
-    return format_stat_time(out.splitlines()[0])
+    for line in content.splitlines():
+        line = line.strip()
+        if line.lower().startswith(APT_UPDATE_PREFIX):
+            value = line[len(APT_UPDATE_PREFIX):].strip()
+            return format_stat_time(value) if value else None
+    return None
 
 
 def mask_config(config):

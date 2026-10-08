@@ -63,7 +63,7 @@ def test_only_get_in_client():
     from app import proxmox
     src = inspect.getsource(proxmox)
     assert not re.search(r"requests\.(put|delete|patch)", src)
-    assert len(re.findall(r"requests\.post", src)) == 1  # nur Guest-Agent-Exec (fester Befehl)
+    assert not re.search(r"requests\.post", src)
 
 
 def test_group_guests_by_node():
@@ -639,8 +639,16 @@ def _full_app(tmp_path, monkeypatch):
         {"user": "<script>root</script>", "login-time": 1700000000.5}]})
     monkeypatch.setattr(P, "qemu_time", lambda s, n, v: 1700000000000000000)
     monkeypatch.setattr(P, "qemu_fsfreeze_status", lambda s, n, v: "thawed")
-    monkeypatch.setattr(P, "qemu_apt_update_exec", lambda s, n, v: {
-        "exited": 1, "exitcode": 0, "out-data": "2024-05-01 10:11:12.123456789 +0200\n"})
+    base_read = P.qemu_file_read
+    reads = []
+
+    def read(s, n, v, p):
+        reads.append(p)
+        if p == "/srv/info/host_info":
+            return {"content": "foo: bar\napt-update: 2024-05-01 10:11:12.123456789 +0200\n"}
+        return base_read(s, n, v, p)
+    monkeypatch.setattr(P, "qemu_file_read", read)
+    c.reads = reads
     monkeypatch.setattr(P, "qemu_config", lambda s, n, v: {
         "name": "<i>web</i>", "memory": 2048, "cipassword": "s3cret", "sshkeys": "ssh-rsa%20AAA",
         "Password": "hunter2"})
@@ -677,64 +685,47 @@ def test_guest_detail_new_sections_partial_failure(tmp_path, monkeypatch):
     assert "14.11.2023" in html and "01.05.2024" in html and "10.0.0.5" in html
 
 
-def test_guest_detail_exec_permission_denied(tmp_path, monkeypatch):
+def test_apt_update_reads_host_info_file(tmp_path, monkeypatch):
+    c = _full_app(tmp_path, monkeypatch)
+    html = c.get("/guests/100").get_data(as_text=True)
+    assert "/srv/info/host_info" in c.reads and "01.05.2024 10:11:12 (+0200)" in html
+    assert "guest exec" not in html
+
+
+def test_apt_update_fallback_missing_or_malformed(tmp_path, monkeypatch):
     from app import proxmox
     c = _full_app(tmp_path, monkeypatch)
+    P = proxmox.ProxmoxClient
+    base = P.qemu_file_read
 
-    def denied(*a, **k):
-        raise proxmox.ProxmoxPermissionError("403")
-    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_apt_update_exec", denied)
-    r = c.get("/guests/100")
-    html = r.get_data(as_text=True)
-    assert r.status_code == 200 and html.count("Keine Berechtigung für guest exec") == 1
-    assert "Debian" in html and "14.11.2023" in html
-
-
-def test_exec_command_is_fixed(monkeypatch):
-    from app import proxmox
-    calls = []
-
-    class R:
-        def __init__(self, data):
-            self.data = data
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {"data": self.data}
-    monkeypatch.setattr(proxmox.requests, "post", lambda url, **k: calls.append((url, k)) or R({"pid": 7}))
-    monkeypatch.setattr(proxmox.requests, "get", lambda url, **k: R({"exited": 1, "exitcode": 0, "out-data": "x"}))
-    pc = proxmox.ProxmoxClient("h", 8006, "t", "s")
-    pc.qemu_apt_update_exec("n1", 100)
-    assert len(calls) == 1 and calls[0][0].endswith("/nodes/n1/qemu/100/agent/exec")
-    assert calls[0][1]["data"] == {"command": ["stat", "-c", "%y", "/var/lib/apt/lists/"]}
-    import inspect
-    assert list(inspect.signature(pc.qemu_apt_update_exec).parameters) == ["node", "vmid", "wait"]
+    def missing(s, n, v, p):
+        if p == "/srv/info/host_info":
+            raise proxmox.ProxmoxError("x")
+        return base(s, n, v, p)
+    monkeypatch.setattr(P, "qemu_file_read", missing)
+    html = c.get("/guests/100").get_data(as_text=True)
+    assert "Letztes apt-Update" in html and "Nicht verfügbar" in html and "14.11.2023" in html
+    for content in ("apt: 2024-05-01\n", "apt-update:   \n", ""):
+        monkeypatch.setattr(P, "qemu_file_read", lambda s, n, v, p, c_=content: (
+            {"content": c_} if p == "/srv/info/host_info" else base(s, n, v, p)))
+        assert "Nicht verfügbar" in c.get("/guests/100").get_data(as_text=True)
 
 
-def test_exec_permission_http_error(monkeypatch):
-    from app import proxmox
-    import requests as rq
-
-    class R:
-        status_code = 403
-
-        def raise_for_status(self):
-            raise rq.HTTPError(response=self)
-    monkeypatch.setattr(proxmox.requests, "post", lambda url, **k: R())
-    with pytest.raises(proxmox.ProxmoxPermissionError):
-        proxmox.ProxmoxClient("h", 8006, "t", "s").qemu_apt_update_exec("n1", 100)
-
-
-def test_exec_ignores_request_input(tmp_path, monkeypatch):
+def test_apt_update_value_escaped(tmp_path, monkeypatch):
     from app import proxmox
     c = _full_app(tmp_path, monkeypatch)
-    seen = []
-    monkeypatch.setattr(proxmox.ProxmoxClient, "qemu_apt_update_exec",
-                        lambda s, n, v: seen.append((n, v)) or {"exited": 1, "exitcode": 0, "out-data": "x"})
-    c.get("/guests/100?command=rm+-rf+/&cmd=id", headers={"X-Command": "id"})
-    assert seen == [("n1", 100)]
+    P = proxmox.ProxmoxClient
+    base = P.qemu_file_read
+    monkeypatch.setattr(P, "qemu_file_read", lambda s, n, v, p: (
+        {"content": "apt-update: <b>x</b>"} if p == "/srv/info/host_info" else base(s, n, v, p)))
+    html = c.get("/guests/100").get_data(as_text=True)
+    assert "&lt;b&gt;x&lt;/b&gt;" in html and "<b>x</b>" not in html
+
+
+def test_no_guest_exec_in_client():
+    from app import proxmox
+    assert not hasattr(proxmox.ProxmoxClient, "qemu_apt_update_exec")
+    assert not hasattr(proxmox.ProxmoxClient, "_post")
 
 
 def test_guest_detail_lxc_and_stopped_config(tmp_path, monkeypatch):

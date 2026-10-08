@@ -39,8 +39,7 @@
 <h2>Dateisystem-Freeze</h2>
 {% if err.freeze %}<p class="meta">{{ hint }}</p>{% elif d.freeze %}<p>{{ d.freeze }}</p>{% else %}<p class="meta">Nicht verfügbar</p>{% endif %}
 <h2>Letztes apt-Update</h2>
-{% if err.apt_perm %}<p class="meta">Keine Berechtigung für guest exec</p>
-{% elif err.apt %}<p class="meta">Nicht verfügbar</p>
+{% if err.apt %}<p class="meta">Nicht verfügbar</p>
 {% else %}<p>{{ d.apt }}</p>{% endif %}
 {% else %}
 <h2>Filesystem / CPU-Last</h2><p class="meta">Über den Guest Agent bei LXC nicht unterstützt.</p>
