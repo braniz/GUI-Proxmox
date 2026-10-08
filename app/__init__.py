@@ -333,6 +333,8 @@ def create_app(config=None):
         if kind in ("qemu", "lxc"):
             cfg_fn = c.qemu_config if kind == "qemu" else c.lxc_config
             d["config"] = attempt("config", lambda: mask_config(cfg_fn(node, vmid)))
+        if d["cpu_usage"] is None:
+            d["cpu_usage"] = g.get("cpu") if running else None
         return render_template("guest_detail.html", error=None, guest=g, d=d, err=err,
                                running=running, kind=kind)
 
@@ -571,5 +573,12 @@ def create_app(config=None):
             return f"{float(v) * 100:.0f} %"
         except Exception:
             return "-"
+
+    @app.template_filter("cpu_pct")
+    def cpu_pct(v):
+        try:
+            return max(0, min(100, round(float(v) * 100)))
+        except (TypeError, ValueError):
+            return None
 
     return app

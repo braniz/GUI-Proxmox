@@ -767,3 +767,26 @@ def test_apt_update_parsing_and_todo(tmp_path):
     (todo,) = store.all()
     assert todo["title"].startswith("apt-Update überfällig") and todo["status"] == "planned"
     assert todo["history"][0]["user"] == "apt-monitor" and todo["history"][0]["comment"]
+
+
+def test_cpu_pct_filter_and_bar(client):
+    f = client.application.jinja_env.filters["cpu_pct"]
+    assert f(0.256) == 26 and f(2) == 100 and f(-1) == 0
+    assert f(None) is None and f("x") is None
+    tpl = client.application.jinja_env.from_string('{% from "_cpu.html" import cpu_bar %}{{ cpu_bar(v) }}')
+    assert 'style="width:42%"' in tpl.render(v=0.42) and "CPU 42 %" in tpl.render(v=0.42)
+    assert "cpu-bar na" in tpl.render(v=None)
+
+
+def test_guests_page_shows_cpu_bar(tmp_path, monkeypatch):
+    from app import proxmox
+    app = create_app({"SECRET_KEY": "x" * 32, "TESTING": True, "COMMENTS_DB": str(tmp_path / "c.json"),
+                      "ADMIN_PASSWORD_HASH": generate_password_hash("pw")})
+    c = app.test_client()
+    P = proxmox.ProxmoxClient
+    monkeypatch.setattr(P, "nodes", lambda s: [{"node": "n1", "status": "online", "cpu": 0.5}])
+    monkeypatch.setattr(P, "guests", lambda s: [
+        {"node": "n1", "vmid": 101, "name": "ct", "type": "lxc", "status": "stopped"}])
+    _login(c)
+    html = c.get("/guests").get_data(as_text=True)
+    assert "CPU 50 %" in html and "cpu-bar na" in html

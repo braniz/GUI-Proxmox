@@ -51,6 +51,7 @@ th{background:#e9ecef}
 .empty{color:#666;font-size:.9rem}
 @media(max-width:600px){main{padding:.6rem}.tree ul{margin-left:.5rem}}
 @media(max-width:800px){.tree li{grid-template-columns:1fr}.tree .col+.col{border-left:0;padding-left:0}}
+.cpu-bar{display:inline-flex;align-items:center;gap:.4rem;vertical-align:middle}.cpu-track{display:inline-block;width:5rem;max-width:30vw;height:.6rem;background:#e9ecef;border-radius:3px;overflow:hidden}.cpu-fill{display:block;height:100%;background:#2f9e44}.cpu-bar.mid .cpu-fill{background:#f08c00}.cpu-bar.high .cpu-fill{background:#e03131}.cpu-label{font-size:.85rem;color:#666}.cpu-bar.wide .cpu-track{width:14rem;height:.9rem}
 </style></head><body>
 {% if session.user %}
 <nav><a href="{{ url_for('overview') }}">Übersicht</a><a href="{{ url_for('nodes') }}">Nodes</a>

@@ -1,4 +1,4 @@
-{% extends "base.html" %}{% block content %}
+{% extends "base.html" %}{% from "_cpu.html" import cpu_bar %}{% block content %}
 <p><a href="{{ url_for('guests') }}">← Zurück zur Gästeliste</a></p>
 {% if error %}<div class="flash">{{ error }}</div>{% else %}
 <h1>{{ 'VM' if kind == 'qemu' else 'LXC' }} {{ guest.vmid }} · {{ guest.name }}</h1>
@@ -25,6 +25,7 @@
 {% if d.load %}<p>Load Average (1/5/15 min): {{ d.load[0] }} / {{ d.load[1] }} / {{ d.load[2] }}</p>
 {% else %}<p class="meta">Load Average nicht verfügbar{% if err.load %} ({{ hint }}){% endif %}.</p>{% endif %}
 <p class="meta">CPUs: {{ d.cpus if d.cpus else 'nicht verfügbar' }} · Aktuelle CPU-Auslastung: {{ d.cpu_usage|pct if d.cpu_usage is not none else 'nicht verfügbar' }}</p>
+{% if d.cpu_usage is not none %}<p>{{ cpu_bar(d.cpu_usage) }}</p>{% endif %}
 <h2>Betriebssystem</h2>
 {% if err.osinfo %}<p class="meta">{{ hint }}</p>
 {% elif d.osinfo %}<table>{% for k, v in d.osinfo %}<tr><th>{{ k }}</th><td>{{ v }}</td></tr>{% endfor %}</table>
